@@ -12,12 +12,26 @@ import (
 	"zombiezen.com/go/sqlite/sqlitex"
 )
 
+// ClusterOptions control the order in which GenerateCluster stores a
+// cluster, and so the order of the IDs the rows get.
+type ClusterOptions struct {
+	// SortStars stores stars sorted by (x, y, z, seq) instead of in draw
+	// order.
+	SortStars bool
+	// SortPlanets stores planets sorted by star, as SortStars orders them,
+	// then by orbit, instead of in allocation order. Sorted planets are
+	// comparable between runs, but their IDs reveal how many planets each
+	// star has.
+	SortPlanets bool
+}
+
 // GenerateCluster generates a game's cluster and its planets from the game's
-// seeds and stores them, returning the stars in draw order and the planets as
-// cluster.Planets orders them. The game must exist and be active; otherwise
-// it returns ErrGameNotFound or ErrGameInactive. It returns ErrClusterExists
-// if the game already has stars. On error, it stores nothing.
-func (s *Store) GenerateCluster(ctx context.Context, gameID int64) (stars []cluster.Star, planets []cluster.Planet, err error) {
+// seeds and stores them, returning them in the order stored; each planet's
+// Star indexes the returned stars. The game must exist and be active;
+// otherwise it returns ErrGameNotFound or ErrGameInactive. It returns
+// ErrClusterExists if the game already has stars. On error, it stores
+// nothing.
+func (s *Store) GenerateCluster(ctx context.Context, gameID int64, opts ClusterOptions) (stars []cluster.Star, planets []cluster.Planet, err error) {
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -58,6 +72,9 @@ func (s *Store) GenerateCluster(ctx context.Context, gameID int64) (stars []clus
 
 	root := prng.New(seed1, seed2)
 	stars = cluster.Generate(root.Child(prng.Cluster).PCG())
+	if opts.SortStars {
+		cluster.SortStars(stars)
+	}
 	starIDs := make([]int64, len(stars))
 	for i, st := range stars {
 		err = sqlitex.Execute(conn,
@@ -70,6 +87,9 @@ func (s *Store) GenerateCluster(ctx context.Context, gameID int64) (stars []clus
 	}
 
 	planets = cluster.Planets(stars, root.Child(prng.Planets).PRNG())
+	if opts.SortPlanets {
+		cluster.SortPlanets(stars, planets)
+	}
 	for _, p := range planets {
 		err = sqlitex.Execute(conn,
 			`INSERT INTO planets (star_id, orbit, kind) VALUES (?, ?, ?);`,

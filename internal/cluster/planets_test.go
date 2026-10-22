@@ -4,7 +4,6 @@
 package cluster
 
 import (
-	"cmp"
 	"fmt"
 	"hash/fnv"
 	"math/rand/v2"
@@ -22,14 +21,11 @@ func TestPlanets(t *testing.T) {
 	if want := len(stars) + ExtraPlanets; len(planets) != want {
 		t.Fatalf("%d planets, want %d", len(planets), want)
 	}
-	// Planets come in (x, y, z, seq) order of their stars, and each star's
-	// orbits run from 1 with no gaps.
-	compare := func(a, b Star) int {
-		return cmp.Or(cmp.Compare(a.X, b.X), cmp.Compare(a.Y, b.Y), cmp.Compare(a.Z, b.Z), cmp.Compare(a.Seq, b.Seq))
-	}
+	// Every star gets orbit 1 first, in (x, y, z, seq) order. Each star's
+	// orbits then run from 1 with no gaps.
 	counts := make([]int, len(stars))
 	for i, p := range planets {
-		if i > 0 && p.Star != planets[i-1].Star && compare(stars[planets[i-1].Star], stars[p.Star]) >= 0 {
+		if i > 0 && i < len(stars) && Compare(stars[planets[i-1].Star], stars[p.Star]) >= 0 {
 			t.Fatalf("planet %d of star %+v follows star %+v", i, stars[p.Star], stars[planets[i-1].Star])
 		}
 		counts[p.Star]++
@@ -59,8 +55,34 @@ func TestPlanets(t *testing.T) {
 	// math/rand/v2 cannot silently change the planets an existing seed makes.
 	h := fnv.New64a()
 	fmt.Fprint(h, describe(stars, planets))
+	if got := h.Sum64(); got != 0x9b7ffbce4f5dc3f0 {
+		t.Errorf("planets hash = %#x, want 0x9b7ffbce4f5dc3f0", got)
+	}
+
+	// Sorted, planets come in (x, y, z, seq) order of their stars, then
+	// orbit order.
+	sorted := slices.Clone(planets)
+	SortPlanets(stars, sorted)
+	for i := 1; i < len(sorted); i++ {
+		a, b := sorted[i-1], sorted[i]
+		if c := Compare(stars[a.Star], stars[b.Star]); c > 0 || c == 0 && a.Orbit >= b.Orbit {
+			t.Fatalf("sorted planet %d, %+v, follows %+v", i, b, a)
+		}
+	}
+	h.Reset()
+	fmt.Fprint(h, describe(stars, sorted))
 	if got := h.Sum64(); got != 0x32c4623b6cd84606 {
-		t.Errorf("planets hash = %#x, want 0x32c4623b6cd84606", got)
+		t.Errorf("sorted planets hash = %#x, want 0x32c4623b6cd84606", got)
+	}
+}
+
+func TestSortStars(t *testing.T) {
+	stars := Generate(rand.NewPCG(1, 2))
+	SortStars(stars)
+	for i := 1; i < len(stars); i++ {
+		if Compare(stars[i-1], stars[i]) >= 0 {
+			t.Fatalf("star %d, %+v, follows %+v", i, stars[i], stars[i-1])
+		}
 	}
 }
 

@@ -32,10 +32,6 @@ func TestGenerateCluster(t *testing.T) {
 	if seed2>>63 == 0 {
 		t.Fatalf("seed2 = %#x; the test needs a seed with the high bit set", seed2)
 	}
-	g, err := s.CreateGame(t.Context(), seed1, seed2, now)
-	if err != nil {
-		t.Fatal(err)
-	}
 	closed, err := s.CreateGame(t.Context(), seed1, seed2, now)
 	if err != nil {
 		t.Fatal(err)
@@ -52,78 +48,92 @@ func TestGenerateCluster(t *testing.T) {
 		{"missing game", 999, store.ErrGameNotFound},
 		{"inactive game", closed.ID, store.ErrGameInactive},
 	} {
-		if _, _, err := s.GenerateCluster(t.Context(), tc.gameID); !errors.Is(err, tc.want) {
+		if _, _, err := s.GenerateCluster(t.Context(), tc.gameID, store.ClusterOptions{}); !errors.Is(err, tc.want) {
 			t.Errorf("GenerateCluster, %s = %v, want %v", tc.name, err, tc.want)
 		}
 	}
 
-	stars, planets, err := s.GenerateCluster(t.Context(), g.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := cluster.Generate(prng.New(seed1, seed2).Child(prng.Cluster).PCG())
-	if fmt.Sprint(stars) != fmt.Sprint(want) {
-		t.Error("GenerateCluster did not draw from the game's cluster source")
-	}
-	wantPlanets := cluster.Planets(want, prng.New(seed1, seed2).Child(prng.Planets).PRNG())
-	if fmt.Sprint(planets) != fmt.Sprint(wantPlanets) {
-		t.Error("GenerateCluster did not draw from the game's planets source")
-	}
-	var stored []cluster.Star
-	withConn(t, s, func(conn *sqlite.Conn) {
-		err := sqlitex.Execute(conn, `SELECT x, y, z, seq FROM stars WHERE game_id = ? ORDER BY id;`, &sqlitex.ExecOptions{
-			Args: []any{g.ID},
-			ResultFunc: func(stmt *sqlite.Stmt) error {
-				stored = append(stored, cluster.Star{
-					X: stmt.ColumnInt(0), Y: stmt.ColumnInt(1), Z: stmt.ColumnInt(2), Seq: stmt.ColumnText(3),
-				})
-				return nil
-			},
-		})
+	var total int
+	for _, opts := range []store.ClusterOptions{{}, {SortStars: true}, {SortPlanets: true}, {SortStars: true, SortPlanets: true}} {
+		g, err := s.CreateGame(t.Context(), seed1, seed2, now)
 		if err != nil {
 			t.Fatal(err)
 		}
-	})
-	if fmt.Sprint(stored) != fmt.Sprint(want) {
-		t.Errorf("stored %d stars that differ from the %d generated", len(stored), len(want))
-	}
-	var storedPlanets []string
-	withConn(t, s, func(conn *sqlite.Conn) {
-		err := sqlitex.Execute(conn,
-			`SELECT s.x, s.y, s.z, s.seq, p.orbit, p.kind
-			 FROM planets p JOIN stars s ON s.id = p.star_id
-			 WHERE s.game_id = ? ORDER BY s.x, s.y, s.z, s.seq, p.orbit;`,
-			&sqlitex.ExecOptions{
+		stars, planets, err := s.GenerateCluster(t.Context(), g.ID, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := cluster.Generate(prng.New(seed1, seed2).Child(prng.Cluster).PCG())
+		if opts.SortStars {
+			cluster.SortStars(want)
+		}
+		if fmt.Sprint(stars) != fmt.Sprint(want) {
+			t.Errorf("%+v: GenerateCluster did not draw from the game's cluster source", opts)
+		}
+		wantPlanets := cluster.Planets(want, prng.New(seed1, seed2).Child(prng.Planets).PRNG())
+		if opts.SortPlanets {
+			cluster.SortPlanets(want, wantPlanets)
+		}
+		if fmt.Sprint(planets) != fmt.Sprint(wantPlanets) {
+			t.Errorf("%+v: GenerateCluster did not draw from the game's planets source", opts)
+		}
+		total += len(planets)
+
+		// Rows are stored in the order returned.
+		var stored []cluster.Star
+		var storedPlanets []string
+		withConn(t, s, func(conn *sqlite.Conn) {
+			err := sqlitex.Execute(conn, `SELECT x, y, z, seq FROM stars WHERE game_id = ? ORDER BY id;`, &sqlitex.ExecOptions{
 				Args: []any{g.ID},
 				ResultFunc: func(stmt *sqlite.Stmt) error {
-					storedPlanets = append(storedPlanets, fmt.Sprint(
-						stmt.ColumnInt(0), stmt.ColumnInt(1), stmt.ColumnInt(2), stmt.ColumnText(3),
-						stmt.ColumnInt(4), stmt.ColumnText(5)))
+					stored = append(stored, cluster.Star{
+						X: stmt.ColumnInt(0), Y: stmt.ColumnInt(1), Z: stmt.ColumnInt(2), Seq: stmt.ColumnText(3),
+					})
 					return nil
 				},
 			})
-		if err != nil {
-			t.Fatal(err)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = sqlitex.Execute(conn,
+				`SELECT s.x, s.y, s.z, s.seq, p.orbit, p.kind
+				 FROM planets p JOIN stars s ON s.id = p.star_id
+				 WHERE s.game_id = ? ORDER BY p.id;`,
+				&sqlitex.ExecOptions{
+					Args: []any{g.ID},
+					ResultFunc: func(stmt *sqlite.Stmt) error {
+						storedPlanets = append(storedPlanets, fmt.Sprint(
+							stmt.ColumnInt(0), stmt.ColumnInt(1), stmt.ColumnInt(2), stmt.ColumnText(3),
+							stmt.ColumnInt(4), stmt.ColumnText(5)))
+						return nil
+					},
+				})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+		if fmt.Sprint(stored) != fmt.Sprint(want) {
+			t.Errorf("%+v: stored %d stars that differ from the %d generated", opts, len(stored), len(want))
 		}
-	})
-	var generated []string
-	for _, p := range wantPlanets {
-		st := want[p.Star]
-		generated = append(generated, fmt.Sprint(st.X, st.Y, st.Z, st.Seq, p.Orbit, p.Kind))
-	}
-	if fmt.Sprint(storedPlanets) != fmt.Sprint(generated) {
-		t.Errorf("stored %d planets that differ from the %d generated", len(storedPlanets), len(generated))
-	}
+		var generated []string
+		for _, p := range wantPlanets {
+			st := want[p.Star]
+			generated = append(generated, fmt.Sprint(st.X, st.Y, st.Z, st.Seq, p.Orbit, p.Kind))
+		}
+		if fmt.Sprint(storedPlanets) != fmt.Sprint(generated) {
+			t.Errorf("%+v: stored %d planets that differ from the %d generated", opts, len(storedPlanets), len(generated))
+		}
 
-	if _, _, err := s.GenerateCluster(t.Context(), g.ID); !errors.Is(err, store.ErrClusterExists) {
-		t.Errorf("GenerateCluster again = %v, want ErrClusterExists", err)
+		if _, _, err := s.GenerateCluster(t.Context(), g.ID, opts); !errors.Is(err, store.ErrClusterExists) {
+			t.Errorf("%+v: GenerateCluster again = %v, want ErrClusterExists", opts, err)
+		}
 	}
 	withConn(t, s, func(conn *sqlite.Conn) {
-		if n := count(t, conn, `SELECT count(*) FROM stars;`); n != len(want) {
-			t.Errorf("%d stars, want %d (the failed attempts must add nothing)", n, len(want))
+		if n := count(t, conn, `SELECT count(*) FROM stars;`); n != 4*159 {
+			t.Errorf("%d stars, want %d (the failed attempts must add nothing)", n, 4*159)
 		}
-		if n := count(t, conn, `SELECT count(*) FROM planets;`); n != len(wantPlanets) {
-			t.Errorf("%d planets, want %d (the failed attempts must add nothing)", n, len(wantPlanets))
+		if n := count(t, conn, `SELECT count(*) FROM planets;`); n != total {
+			t.Errorf("%d planets, want %d (the failed attempts must add nothing)", n, total)
 		}
 	})
 }

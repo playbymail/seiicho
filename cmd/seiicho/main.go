@@ -6,7 +6,7 @@
 // Usage:
 //
 //	seiicho create-game [--env ENV] [--db PATH] --seed SEED [--with-gamemaster ID]
-//	seiicho generate-cluster [--env ENV] [--db PATH] --game ID
+//	seiicho generate-cluster [--env ENV] [--db PATH] --game ID [--sort-stars=BOOL] [--sort-planets=BOOL]
 //	seiicho add-seat [--env ENV] [--db PATH] --game ID --account ID [--gamemaster]
 //	seiicho promote-seat [--env ENV] [--db PATH] --game ID --account ID
 //	seiicho list-accounts [--env ENV] [--db PATH] [--json]
@@ -28,7 +28,10 @@
 // seed always generates the same game.
 //
 // generate-cluster generates a game's cluster of star systems and their
-// planets from its seed. It fails if the game is missing or inactive, or already has a cluster.
+// planets from its seed. By default it stores stars sorted by (x, y, z, seq)
+// and planets sorted by star and orbit; --sort-stars=false stores stars in
+// draw order, and --sort-planets=false stores planets in allocation order. It
+// fails if the game is missing or inactive, or already has a cluster.
 //
 // add-seat seats an account in a game as a player, or as a gamemaster with
 // --gamemaster. It fails if the game or the account is missing or inactive,
@@ -187,9 +190,11 @@ func generateClusterCommand() *ff.Command {
 	game := s.Flags.Int64Config(ff.FlagConfig{
 		LongName: "game", Placeholder: "ID", NoDefault: true, Usage: "ID of the game (required)",
 	}, 0)
+	sortStars := s.Flags.BoolLongDefault("sort-stars", true, "store stars sorted by (x, y, z, seq) instead of in draw order")
+	sortPlanets := s.Flags.BoolLongDefault("sort-planets", true, "store planets sorted by star and orbit instead of in allocation order")
 	return &ff.Command{
 		Name:      "generate-cluster",
-		Usage:     "seiicho generate-cluster [--env ENV] [--db PATH] --game ID",
+		Usage:     "seiicho generate-cluster [--env ENV] [--db PATH] --game ID [--sort-stars=BOOL] [--sort-planets=BOOL]",
 		ShortHelp: "generate a game's cluster of star systems",
 		Flags:     s.Flags,
 		Exec: settings.NoArgs(func(ctx context.Context) error {
@@ -202,7 +207,9 @@ func generateClusterCommand() *ff.Command {
 				return err
 			}
 			defer db.Close()
-			stars, planets, err := db.GenerateCluster(ctx, gameID)
+			stars, planets, err := db.GenerateCluster(ctx, gameID, store.ClusterOptions{
+				SortStars: *sortStars, SortPlanets: *sortPlanets,
+			})
 			if err != nil {
 				return fmt.Errorf("game %d: %w", gameID, err)
 			}

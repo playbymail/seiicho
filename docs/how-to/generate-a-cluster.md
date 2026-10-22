@@ -33,6 +33,23 @@ in all. The stars in each system are lettered from `A`.
 Every star has at least one planet and at most 10, in orbits numbered from 1
 with no gaps: 721 planets in all. Each planet is rocky.
 
+## Choose the order rows are stored in
+
+By default the command stores stars sorted by their coordinates and letter,
+and planets sorted by star and then orbit, so two games created with the same
+seed get rows in the same order. Sorted planet IDs show how many planets each
+star has, which players could use to guess at systems they have not explored.
+
+To store stars in the order they were drawn, or planets in the order they
+were allocated, turn the sorts off:
+
+```sh
+go run ./cmd/seiicho generate-cluster --env development --db tmp/seiicho.db --game 1 --sort-stars=false --sort-planets=false
+```
+
+The flags change only the order of the rows and their IDs, not the cluster or
+its planets.
+
 ## If the command fails
 
 If it fails, the command stores nothing.

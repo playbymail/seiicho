@@ -13,6 +13,8 @@ import (
 
 	"github.com/playbymail/seiicho/internal/settings"
 	"github.com/playbymail/seiicho/internal/store"
+	"zombiezen.com/go/sqlite"
+	"zombiezen.com/go/sqlite/sqlitex"
 )
 
 func TestOpenRejectsMemoryDatabase(t *testing.T) {
@@ -180,6 +182,50 @@ func TestGenerateCluster(t *testing.T) {
 	}
 	if err := run(t.Context(), args("--game", "1")); !errors.Is(err, store.ErrClusterExists) {
 		t.Errorf("generate-cluster again = %v, want ErrClusterExists", err)
+	}
+	if err := run(t.Context(), []string{"create-game", "--env", "test", "--db", path, "--seed", "0x0123456789abcdef"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(t.Context(), args("--game", "2", "--sort-stars=false", "--sort-planets=false")); err != nil {
+		t.Fatalf("generate-cluster unsorted = %v", err)
+	}
+
+	// Count the rows whose ID order differs from their sorted order: none
+	// for game 1, which is sorted by default, and some for game 2.
+	conn, err := sqlite.OpenConn(path, sqlite.OpenReadOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	for _, tc := range []struct {
+		table, query string
+	}{
+		{"stars", `SELECT count(*) FROM (
+			SELECT row_number() OVER (ORDER BY id) AS byID, row_number() OVER (ORDER BY x, y, z, seq) AS sorted
+			FROM stars WHERE game_id = ?) WHERE byID != sorted;`},
+		{"planets", `SELECT count(*) FROM (
+			SELECT row_number() OVER (ORDER BY p.id) AS byID, row_number() OVER (ORDER BY s.x, s.y, s.z, s.seq, p.orbit) AS sorted
+			FROM planets p JOIN stars s ON s.id = p.star_id WHERE s.game_id = ?) WHERE byID != sorted;`},
+	} {
+		for _, game := range []struct {
+			id     int64
+			sorted bool
+		}{{1, true}, {2, false}} {
+			var n int
+			err := sqlitex.Execute(conn, tc.query, &sqlitex.ExecOptions{
+				Args: []any{game.id},
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					n = stmt.ColumnInt(0)
+					return nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if game.sorted != (n == 0) {
+				t.Errorf("game %d has %d %s out of sorted order, want sorted %v", game.id, n, tc.table, game.sorted)
+			}
+		}
 	}
 }
 

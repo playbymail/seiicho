@@ -34,32 +34,37 @@ type Planet struct {
 	Kind  string
 }
 
+// Compare orders stars by (x, y, z, seq).
+func Compare(a, b Star) int {
+	return cmp.Or(cmp.Compare(a.X, b.X), cmp.Compare(a.Y, b.Y), cmp.Compare(a.Z, b.Z), cmp.Compare(a.Seq, b.Seq))
+}
+
 // Planets allocates planets to stars, drawing from p. It sorts the stars by
 // (x, y, z, seq), gives each one planet, and then makes ExtraPlanets random
 // allocations with replacement, each choosing a star with Roll(1, 0, n-1)
 // from the n stars that have fewer than MaxOrbits planets. A star's planets
 // fill its orbits from 1 with no gaps. Every planet is Rocky.
 //
-// It returns the planets ordered by star, in sorted order, then orbit. The
-// result depends on the stars but not on their order. It panics if stars
-// cannot hold ExtraPlanets more planets.
+// It returns the planets in the order they were allocated, so a planet's
+// place does not reveal how many planets its star has; SortPlanets puts
+// them in star order. The result depends on the stars but not on their
+// order. It panics if stars cannot hold ExtraPlanets more planets.
 func Planets(stars []Star, p *prng.PRNG) []Planet {
 	order := make([]int, len(stars))
 	for i := range order {
 		order[i] = i
 	}
-	slices.SortFunc(order, func(i, j int) int {
-		a, b := stars[i], stars[j]
-		return cmp.Or(cmp.Compare(a.X, b.X), cmp.Compare(a.Y, b.Y), cmp.Compare(a.Z, b.Z), cmp.Compare(a.Seq, b.Seq))
-	})
+	slices.SortFunc(order, func(i, j int) int { return Compare(stars[i], stars[j]) })
 
 	// counts and eligible index into order. A star leaves eligible by
 	// swapping with the last eligible star.
+	planets := make([]Planet, 0, len(stars)+ExtraPlanets)
 	counts := make([]int, len(order))
 	eligible := make([]int, len(order))
-	for i := range counts {
+	for i, star := range order {
 		counts[i] = 1
 		eligible[i] = i
+		planets = append(planets, Planet{Star: star, Orbit: 1, Kind: Rocky})
 	}
 	for range ExtraPlanets {
 		if len(eligible) == 0 {
@@ -68,18 +73,25 @@ func Planets(stars []Star, p *prng.PRNG) []Planet {
 		k := p.Roll(1, 0, len(eligible)-1)
 		i := eligible[k]
 		counts[i]++
+		planets = append(planets, Planet{Star: order[i], Orbit: counts[i], Kind: Rocky})
 		if counts[i] == MaxOrbits {
 			last := len(eligible) - 1
 			eligible[k], eligible[last] = eligible[last], eligible[k]
 			eligible = eligible[:last]
 		}
 	}
-
-	var planets []Planet
-	for i, star := range order {
-		for orbit := 1; orbit <= counts[i]; orbit++ {
-			planets = append(planets, Planet{Star: star, Orbit: orbit, Kind: Rocky})
-		}
-	}
 	return planets
+}
+
+// SortStars sorts stars by (x, y, z, seq).
+func SortStars(stars []Star) {
+	slices.SortFunc(stars, Compare)
+}
+
+// SortPlanets sorts planets by their stars, in (x, y, z, seq) order, then by
+// orbit. stars are the stars the planets were allocated to.
+func SortPlanets(stars []Star, planets []Planet) {
+	slices.SortFunc(planets, func(a, b Planet) int {
+		return cmp.Or(Compare(stars[a.Star], stars[b.Star]), cmp.Compare(a.Orbit, b.Orbit))
+	})
 }
