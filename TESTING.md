@@ -2,7 +2,8 @@
 
 Read this before using or changing the default test accounts, in-memory
 databases, or the HTTP account and login helpers. It covers what exists only in
-the `development` and `agent` environments. For `go vet` and `go test`, see
+the `development` and `agent` environments, and which kind of database a Go test
+should use. For `go vet` and `go test`, see
 [WORKFLOW.md](WORKFLOW.md); for public origins, portals, secure cookies, and
 CSRF protection, follow [PROXIES.md](PROXIES.md).
 
@@ -109,3 +110,30 @@ mutation, password verification, authenticated sessions, safe redirects, and
 CSRF rejection through HTTP tests. Exercise account creation and login through
 the public HTTPS origin in a browser as well. Keep helpers absent in `test`;
 HTTP tests can explicitly configure `development` or `agent` when testing them.
+
+## Databases in Go tests
+
+Go tests use two kinds of database: private in-memory databases and files in
+`t.TempDir()`. Choose by what the test calls.
+
+- **Store, server, and other package tests** that hold a `*store.Store` for the
+  whole test use `store.OpenPrivateMemory`, named after the test. They are fast,
+  and parallel tests stay isolated.
+- **Command tests** (`cmd/seiicho`, `cmd/seiichodb`) call the command functions
+  with the same `--env` and `--db` flags a user types, so they need a database
+  file in `t.TempDir()`:
+  - Every command except `seiichod` rejects `--db :memory:`.
+  - Each command opens and closes its own connection. A private in-memory
+    database would disappear when that connection closes. A file survives
+    between the test's setup, the command, and the test's checks.
+  - The file goes through the same path a user's does: flag parsing,
+    `store.Open`'s ownership and schema checks, and the hint to run
+    `seiichodb migrate`.
+- **Tests of the file contract** (Create, Open, Migrate, ownership, and WAL)
+  use files in `t.TempDir()`, because an in-memory database cannot use WAL. See
+  [SQLITE3.md](SQLITE3.md).
+
+Keep command functions as wrappers around the flags and the database file, and
+test them end to end against a temporary file. Do not have them take an open
+`*store.Store` so they can be tested in memory: the flags and file handling
+would then go untested.
