@@ -14,6 +14,18 @@ the contract; it does not introduce a database implementation or dependencies.
   framework. Set `Schema.AppID` to the application ID below and let ZombieZen
   manage `PRAGMA user_version`. Do not edit already-applied migrations.
 
+## Squashing migrations
+
+While the version in `version.go` has `PreRelease: "alpha"`, the user may ask to
+squash migrations by folding them into migration 1. This is the only exception
+to the rule against editing applied migrations, and it applies only when the
+user asks. In beta or later, refuse to squash and append a new migration instead.
+
+A squash keeps the schema version unchanged, so existing databases still appear
+current but do not have the new schema. `seiichodb migrate` cannot repair them.
+Recreate each one with `seiichodb create`, after backing it up or getting the
+user's agreement to discard it.
+
 ## Ownership
 
 The database application ID is the ASCII bytes `seii`, interpreted as a big-endian
