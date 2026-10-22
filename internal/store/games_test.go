@@ -386,3 +386,57 @@ func TestListSeats(t *testing.T) {
 		t.Errorf("Seats of a game whose only seat is inactive = %+v, %v; want that inactive seat", seats, err)
 	}
 }
+
+func TestCreateGameWithGamemaster(t *testing.T) {
+	s, err := store.OpenPrivateMemory(t.Context(), memoryName(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(1_800_000_000, 0)
+	// No administrator exists, so only an explicit gamemaster can be seated.
+	player, err := s.CreateAccount(t.Context(), "player@example.com", []byte("x"), false, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retired, err := s.CreateAccount(t.Context(), "retired@example.com", []byte("x"), false, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAccountActive(t.Context(), retired.Email, false); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		accountID int64
+		want      error
+	}{
+		{"missing account", 999, store.ErrAccountNotFound},
+		{"inactive account", retired.ID, store.ErrAccountInactive},
+	} {
+		if _, err := s.CreateGameWithGamemaster(t.Context(), tc.accountID, now); !errors.Is(err, tc.want) {
+			t.Errorf("CreateGameWithGamemaster, %s = %v, want %v", tc.name, err, tc.want)
+		}
+	}
+	withConn(t, s, func(conn *sqlite.Conn) {
+		if n := count(t, conn, `SELECT count(*) FROM games;`); n != 0 {
+			t.Fatalf("%d games, want 0 (the failed attempts must create nothing)", n)
+		}
+	})
+
+	g, err := s.CreateGameWithGamemaster(t.Context(), player.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.GM.ID != player.ID || g.GM.Email != player.Email {
+		t.Errorf("gamemaster = %d %s, want %d %s", g.GM.ID, g.GM.Email, player.ID, player.Email)
+	}
+	seats, err := s.Seats(t.Context(), g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seats) != 1 || seats[0].ID != g.SeatID || seats[0].AccountID != player.ID || !seats[0].IsGM || !seats[0].IsActive {
+		t.Errorf("seats = %+v, want only an active gamemaster seat %d for account %d", seats, g.SeatID, player.ID)
+	}
+}

@@ -5,7 +5,7 @@
 //
 // Usage:
 //
-//	seiicho create-game [--env ENV] [--db PATH]
+//	seiicho create-game [--env ENV] [--db PATH] [--with-gamemaster ID]
 //	seiicho add-seat [--env ENV] [--db PATH] --game ID --account ID [--gamemaster]
 //	seiicho promote-seat [--env ENV] [--db PATH] --game ID --account ID
 //	seiicho list-accounts [--env ENV] [--db PATH] [--json]
@@ -20,7 +20,9 @@
 //
 // create-game creates a game and seats the senior active administrator, the
 // one with the lowest account ID, as its gamemaster. It fails if there is no
-// active administrator.
+// active administrator. With --with-gamemaster, it seats that account as the
+// gamemaster instead; the account must exist and be active, but need not be
+// an administrator.
 //
 // add-seat seats an account in a game as a player, or as a gamemaster with
 // --gamemaster. It fails if the game or the account is missing or inactive,
@@ -122,19 +124,34 @@ func open(ctx context.Context, s *settings.Settings) (*store.Store, error) {
 
 func createGameCommand() *ff.Command {
 	s := settings.New("create-game")
+	gm := s.Flags.Int64Config(ff.FlagConfig{
+		LongName: "with-gamemaster", Placeholder: "ID", NoDefault: true,
+		Usage: "ID of the account to seat as gamemaster instead of an administrator",
+	}, 0)
 	return &ff.Command{
 		Name:      "create-game",
-		Usage:     "seiicho create-game [--env ENV] [--db PATH]",
-		ShortHelp: "create a game with the senior active administrator as gamemaster",
+		Usage:     "seiicho create-game [--env ENV] [--db PATH] [--with-gamemaster ID]",
+		ShortHelp: "create a game with a gamemaster",
 		Flags:     s.Flags,
 		Exec: settings.NoArgs(func(ctx context.Context) error {
+			withGM := false
+			if f, ok := s.Flags.GetFlag("with-gamemaster"); ok && f.IsSet() {
+				if *gm <= 0 {
+					return errors.New("--with-gamemaster must be a positive account ID")
+				}
+				withGM = true
+			}
 			db, err := open(ctx, s)
 			if err != nil {
 				return err
 			}
 			defer db.Close()
-			g, err := db.CreateGame(ctx, time.Now())
-			if err != nil {
+			var g store.Game
+			if withGM {
+				if g, err = db.CreateGameWithGamemaster(ctx, *gm, time.Now()); err != nil {
+					return fmt.Errorf("account %d: %w", *gm, err)
+				}
+			} else if g, err = db.CreateGame(ctx, time.Now()); err != nil {
 				return err
 			}
 			fmt.Printf("created game %d with gamemaster %s (seat %d)\n", g.ID, g.GM.Email, g.SeatID)

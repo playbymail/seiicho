@@ -44,9 +44,35 @@ func TestCreateGame(t *testing.T) {
 	if _, err := db.CreateAccount(t.Context(), "admin@example.com", []byte("x"), true, time.Unix(1, 0)); err != nil {
 		t.Fatal(err)
 	}
+	player, err := db.CreateAccount(t.Context(), "player@example.com", []byte("x"), false, time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
 	db.Close()
 	if err := run(t.Context(), args); err != nil {
 		t.Fatalf("createGame = %v", err)
+	}
+
+	withGM := func(id string) []string { return append(args, "--with-gamemaster", id) }
+	for _, id := range []string{"0", "-1"} {
+		if err := run(t.Context(), withGM(id)); err == nil || !strings.Contains(err.Error(), "must be a positive account ID") {
+			t.Errorf("--with-gamemaster %s = %v, want rejection", id, err)
+		}
+	}
+	if err := run(t.Context(), withGM("999")); !errors.Is(err, store.ErrAccountNotFound) {
+		t.Errorf("--with-gamemaster for a missing account = %v, want ErrAccountNotFound", err)
+	}
+	if err := run(t.Context(), withGM(strconv.FormatInt(player.ID, 10))); err != nil {
+		t.Fatalf("--with-gamemaster = %v", err)
+	}
+	got, err := capture(t, "list-games", "--env", "test", "--db", path, "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, `"gamemasters": [
+      "player@example.com"
+    ]`) {
+		t.Errorf("list-games after --with-gamemaster = %s, want player@example.com as the second game's gamemaster", got)
 	}
 }
 

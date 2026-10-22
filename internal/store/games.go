@@ -16,14 +16,49 @@ import (
 type Game struct {
 	ID     int64
 	SeatID int64
-	// GM is the administrator who holds the gamemaster seat.
+	// GM is the account that holds the gamemaster seat.
 	GM Account
 }
 
 // CreateGame adds a game and seats the senior active administrator, the one
 // with the lowest account ID, as its gamemaster. It returns ErrNoActiveAdmin,
 // and creates nothing, if there is no active administrator.
-func (s *Store) CreateGame(ctx context.Context, now time.Time) (g Game, err error) {
+func (s *Store) CreateGame(ctx context.Context, now time.Time) (Game, error) {
+	return s.createGame(ctx, now, func(conn *sqlite.Conn) (Account, error) {
+		a, err := queryAccount(conn,
+			`SELECT id, email, password_hash, is_admin, is_active FROM accounts
+			 WHERE is_admin = 1 AND is_active = 1 ORDER BY id LIMIT 1;`)
+		if errors.Is(err, ErrNotFound) {
+			return Account{}, ErrNoActiveAdmin
+		}
+		return a, err
+	})
+}
+
+// CreateGameWithGamemaster adds a game and seats the given account, which
+// need not be an administrator, as its gamemaster. It returns
+// ErrAccountNotFound or ErrAccountInactive, and creates nothing, unless the
+// account exists and is active.
+func (s *Store) CreateGameWithGamemaster(ctx context.Context, accountID int64, now time.Time) (Game, error) {
+	return s.createGame(ctx, now, func(conn *sqlite.Conn) (Account, error) {
+		a, err := queryAccount(conn,
+			`SELECT id, email, password_hash, is_admin, is_active FROM accounts WHERE id = ?;`,
+			accountID)
+		if errors.Is(err, ErrNotFound) {
+			return Account{}, ErrAccountNotFound
+		} else if err != nil {
+			return Account{}, err
+		}
+		if !a.IsActive {
+			return Account{}, ErrAccountInactive
+		}
+		return a, nil
+	})
+}
+
+// createGame adds a game and seats the account that gamemaster returns as its
+// gamemaster, all in one transaction. If gamemaster fails, nothing is created.
+func (s *Store) createGame(ctx context.Context, now time.Time, gamemaster func(*sqlite.Conn) (Account, error)) (g Game, err error) {
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
 		return Game{}, err
@@ -36,12 +71,7 @@ func (s *Store) CreateGame(ctx context.Context, now time.Time) (g Game, err erro
 	}
 	defer end(&err)
 
-	g.GM, err = queryAccount(conn,
-		`SELECT id, email, password_hash, is_admin, is_active FROM accounts
-		 WHERE is_admin = 1 AND is_active = 1 ORDER BY id LIMIT 1;`)
-	if errors.Is(err, ErrNotFound) {
-		return Game{}, ErrNoActiveAdmin
-	} else if err != nil {
+	if g.GM, err = gamemaster(conn); err != nil {
 		return Game{}, err
 	}
 
