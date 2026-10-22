@@ -49,18 +49,9 @@ against a throwaway in-memory database, and every new database starts with an
 admin account (`admin@example.com` / `bad-choices-2026`) and two player
 accounts. See [TESTING.md](TESTING.md) for the full list and the HTTP helpers.
 
-## Changing a password
-
-```sh
-go run ./cmd/seiichodb set-password --env development --db tmp/seiicho.db --email admin@example.com
-```
-
-The new password is read from standard input: a terminal gets a prompt that
-does not echo, and piped input supplies the first line. Changing a password
-ends all of that account's sessions.
-
 ## How-to guides
 
+- [How to change an account's password](docs/how-to/change-a-password.md)
 - [How to create a game](docs/how-to/create-a-game.md)
 - [How to deactivate or reactivate an account](docs/how-to/deactivate-an-account.md)
 
