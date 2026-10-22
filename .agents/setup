@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+go_version="$(awk '$1 == "go" { print $2; exit }' go.mod)"
+
+echo "Preparing Go ${go_version}"
+if [[ ! -x /usr/local/go/bin/go ]] || [[ "$(/usr/local/go/bin/go version)" != "go version go${go_version} linux/"* ]]; then
+  case "$(uname -m)" in
+    x86_64) arch=amd64 ;;
+    aarch64) arch=arm64 ;;
+    *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+  esac
+
+  download_dir="$(mktemp -d)"
+  trap 'rm -rf "$download_dir"' EXIT
+  archive="go${go_version}.linux-${arch}.tar.gz"
+  curl -fsSL --retry 3 'https://go.dev/dl/?mode=json&include=all' -o "$download_dir/releases.json"
+  checksum="$(jq -er --arg archive "$archive" \
+    '.[] | .files[] | select(.filename == $archive) | .sha256' "$download_dir/releases.json")"
+  curl -fsSL --retry 3 "https://go.dev/dl/${archive}" -o "$download_dir/$archive"
+  printf '%s  %s\n' "$checksum" "$download_dir/$archive" | sha256sum -c -
+  tar -xzf "$download_dir/$archive" -C "$download_dir"
+  sudo rm -rf /usr/local/go
+  sudo mv "$download_dir/go" /usr/local/go
+fi
+
+# Standard PATH locations keep Go available to new shells and orb services.
+sudo ln -sfn /usr/local/go/bin/go /usr/local/bin/go
+sudo ln -sfn /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+export PATH="/usr/local/bin:$PATH"
+go version
+
+echo "Downloading Go module dependencies"
+go mod download
+echo "Orb setup complete (${SECONDS}s)"
