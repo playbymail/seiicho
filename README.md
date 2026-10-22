@@ -5,9 +5,9 @@ A strategic, turn-based 4X game played in the browser.
 ## Running locally
 
 ```sh
-mkdir -p tmp                                   # the database directory is never created for you
-go run ./cmd/seiichodb create --env development
-go run ./cmd/seiichod --env development
+mkdir -p tmp      # the database directory is never created for you
+go run ./cmd/seiichodb create --env development --db tmp/seiicho.db
+go run ./cmd/seiichod --env development --db tmp/seiicho.db
 ```
 
 There are two commands. `seiichodb` owns the database file: it creates it,
@@ -16,11 +16,13 @@ only; it never creates or migrates a database and refuses to start on one whose
 schema is out of date. After pulling a schema change, run:
 
 ```sh
-go run ./cmd/seiichodb migrate --env development
+go run ./cmd/seiichodb migrate --env development --db tmp/seiicho.db
 ```
 
-`.env.development` points the database at `tmp/seiicho.db` and the backend
-listener at `127.0.0.1:18443`; Caddy serves the public HTTPS origin.
+`.env.development` sets the backend listener to `127.0.0.1:18443`; Caddy serves
+the public HTTPS origin. The tracked environment files do not set the database
+path. To drop `--db`, set `SEIICHO_DB` in your untracked
+`.env.development.local`.
 
 ## Settings
 
@@ -47,7 +49,7 @@ accounts. See [TESTING.md](TESTING.md) for the full list and the HTTP helpers.
 ## Changing a password
 
 ```sh
-go run ./cmd/seiichodb set-password --env development --email admin@example.com
+go run ./cmd/seiichodb set-password --env development --db tmp/seiicho.db --email admin@example.com
 ```
 
 The new password is read from standard input: a terminal gets a prompt that
