@@ -50,7 +50,9 @@ proxy connection is not permission to change Caddy configuration.
   commit a generated portal hostname or reuse the laptop origin in the orb.
 - `.agents/setup` only installs Go and dependencies; it does not configure
   networking or start servers. Keep long-running web services supervised by Amp,
-  not started from setup. No web service is defined yet.
+  not started from setup. The `seiicho` service in `.amp/services.yaml` runs
+  `serve` in the `agent` environment on `0.0.0.0:$PORT`, creating
+  `tmp/seiicho-agent.db` on first start.
 - Amp documents forwarding the public `Host` and standard forwarded HTTPS
   headers. Verify actual Origin and Fetch Metadata handling, normal forms, and
   HTMX submissions once the server exists; do not assume proxy compatibility

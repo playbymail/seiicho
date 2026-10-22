@@ -1,0 +1,15 @@
+services:
+  seiicho:
+    # create-database refuses an existing file, so only run it on a fresh orb.
+    command: >-
+      mkdir -p tmp &&
+      { test -e "$SEIICHO_DB" || go run ./cmd/seiicho create-database; } &&
+      exec go run ./cmd/seiicho serve --addr "0.0.0.0:$PORT"
+    env:
+      SEIICHO_ENV: agent
+      SEIICHO_DB: tmp/seiicho-agent.db
+    health: /api/healthz
+    portal:
+      url: /
+      title: Seiicho
+      description: Opens the landing page. Sign in with POST /__agent/create-account/<email> and POST /__agent/log-me-in/<email>.
