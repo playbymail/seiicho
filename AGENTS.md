@@ -18,6 +18,8 @@ architecture, not a claim that these features are already implemented.
   migrations, or database tests.
 - Read and follow [PROXIES.md](PROXIES.md) before working on HTTP startup,
   listener configuration, proxy integration, or CSRF protection.
+- Read and follow [HTTP_TESTING.md](HTTP_TESTING.md) before implementing or using
+  HTTP account and login helpers for agent testing.
 - Do not create GitHub Actions workflows or other GitHub CI actions.
 
 ## Application architecture
@@ -40,7 +42,8 @@ architecture, not a claim that these features are already implemented.
 
 - Registration is **invite-only**. Enforce invitation validity on the server
   before creating an account; hiding a public registration link is insufficient.
-  Do not introduce an unrestricted registration path.
+  Do not introduce an unrestricted registration path. The environment-gated
+  testing helpers in [HTTP_TESTING.md](HTTP_TESTING.md) are the only exception.
 - Hash passwords with `golang.org/x/crypto/bcrypt`, explicitly passing
   **`bcrypt.MinCost`** to `bcrypt.GenerateFromPassword`. Verify passwords with
   `bcrypt.CompareHashAndPassword`; never store or log plaintext passwords.

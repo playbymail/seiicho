@@ -4,6 +4,10 @@ Read this before implementing HTTP startup, network configuration, redirects,
 cookies, or CSRF protection. These are application requirements, not a claim that
 an HTTP server has already been implemented.
 
+For development/agent-only POST account and login helpers, also follow
+[HTTP_TESTING.md](HTTP_TESTING.md). Keep their environment gating and the CSRF
+requirements below intact.
+
 ## Caddy is externally managed
 
 - The user runs Caddy in development with configuration at
