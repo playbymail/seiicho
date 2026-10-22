@@ -18,7 +18,7 @@ import (
 	"github.com/playbymail/seiicho/internal/store"
 )
 
-const publicHost = "html-app.localhost:8443"
+const publicHost = "htmx-app.localhost:8443"
 
 var now = time.Unix(1_800_000_000, 0)
 
@@ -190,7 +190,7 @@ func TestCrossOriginProtection(t *testing.T) {
 	for name, headers := range map[string]map[string]string{
 		"cross-site fetch metadata": {"Sec-Fetch-Site": "cross-site"},
 		"mismatched origin":         {"Origin": "https://evil.example"},
-		"origin with wrong port":    {"Origin": "https://html-app.localhost:9443"},
+		"origin with wrong port":    {"Origin": "https://htmx-app.localhost:9443"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "https://"+publicHost+"/login", strings.NewReader(form.Encode()))

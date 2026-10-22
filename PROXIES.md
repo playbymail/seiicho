@@ -26,7 +26,7 @@ requirements below intact.
 
 | Purpose | Address |
 | --- | --- |
-| Browser-facing HTTPS origin | `https://html-app.localhost:8443` |
+| Browser-facing HTTPS origin | `https://htmx-app.localhost:8443` |
 | Application listener port | `18443` |
 | Preferred local backend bind address | `127.0.0.1:18443` |
 
@@ -41,7 +41,7 @@ proxy connection is not permission to change Caddy configuration.
   separate machine: its loopback and `.localhost` names do not reach the user's
   laptop or Caddy. Do not install Caddy to reproduce the laptop setup.
 - Expose the application through an Amp HTTPS portal. Use the generated public
-  URL, not `html-app.localhost:8443`, for browser access inside this environment.
+  URL, not `htmx-app.localhost:8443`, for browser access inside this environment.
 - Declare the eventual web service in `.amp/services.yaml` and run
   `amp orb services ensure`. The service command must listen on Amp's `$PORT`;
   a fixed `port: 18443` may be declared, but do not assume that port is assigned.
