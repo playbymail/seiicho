@@ -15,7 +15,11 @@
 //
 //	--env   SEIICHO_ENV   required: development, test, production, or agent
 //	--db    SEIICHO_DB    required: path to the SQLite database file
+//	                      (serve accepts :memory: in development and agent)
 //	--addr  SEIICHO_ADDR  backend listen address, default 127.0.0.1:18443
+//
+// In the development and agent environments, every new database (including
+// an in-memory one) starts with the default accounts listed in internal/devdata.
 //
 // set-password reads the new password from standard input: it prompts without
 // echo on a terminal, and otherwise reads the first line. The password is
@@ -41,6 +45,7 @@ import (
 
 	"github.com/playbymail/seiicho"
 	"github.com/playbymail/seiicho/internal/auth"
+	"github.com/playbymail/seiicho/internal/devdata"
 	"github.com/playbymail/seiicho/internal/dotenv"
 	"github.com/playbymail/seiicho/internal/server"
 	"github.com/playbymail/seiicho/internal/store"
@@ -48,6 +53,9 @@ import (
 )
 
 const defaultAddr = "127.0.0.1:18443"
+
+// memoryDB is the --db value that selects a new in-memory database.
+const memoryDB = ":memory:"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -81,6 +89,8 @@ type settings struct {
 	env  string
 	db   string
 	addr string
+	// allowMemory permits --db :memory: in development and agent.
+	allowMemory bool
 }
 
 func newSettings(name string) *settings {
@@ -114,6 +124,14 @@ func (s *settings) resolve(args []string) error {
 	if s.db == "" {
 		return errors.New("database path is required (--db or SEIICHO_DB)")
 	}
+	if s.db == memoryDB {
+		if !s.allowMemory {
+			return fmt.Errorf("%s: %s needs a database file; only serve accepts an in-memory database", s.db, s.fs.Name())
+		}
+		if !devdata.Allowed(s.env) {
+			return fmt.Errorf("%s in env %q: in-memory database %w", s.db, s.env, devdata.ErrNotAllowed)
+		}
+	}
 	if s.fs.Lookup("addr") != nil && !set["addr"] {
 		s.addr = os.Getenv("SEIICHO_ADDR")
 		if s.addr == "" {
@@ -128,7 +146,7 @@ func createDatabase(args []string) error {
 	if err := s.resolve(args); err != nil {
 		return err
 	}
-	db, err := store.Create(context.Background(), s.db)
+	db, err := createStore(context.Background(), s.env, s.db)
 	if err != nil {
 		return err
 	}
@@ -136,11 +154,57 @@ func createDatabase(args []string) error {
 		return err
 	}
 	fmt.Printf("created database %s\n", s.db)
+	if devdata.Allowed(s.env) {
+		for _, a := range devdata.DefaultAccounts {
+			fmt.Printf("created default account %s\n", a.Email)
+		}
+	}
 	return nil
+}
+
+// createStore creates a persistent database, adding the default accounts in
+// development and agent. If that fails, it removes the new database.
+func createStore(ctx context.Context, env, path string) (*store.Store, error) {
+	db, err := store.Create(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	if !devdata.Allowed(env) {
+		return db, nil
+	}
+	if err := devdata.CreateDefaultAccounts(ctx, db, env, time.Now()); err != nil {
+		_ = db.Close()
+		for _, name := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
+			_ = os.Remove(name)
+		}
+		return nil, err
+	}
+	return db, nil
+}
+
+// openServeStore opens the database for serve. The in-memory database is
+// allowed only in development and agent, and starts with the default accounts.
+func openServeStore(ctx context.Context, env, path string) (*store.Store, error) {
+	if path != memoryDB {
+		return store.Open(ctx, path)
+	}
+	if !devdata.Allowed(env) {
+		return nil, fmt.Errorf("in-memory database: %w", devdata.ErrNotAllowed)
+	}
+	db, err := store.OpenPrivateMemory(ctx, "seiicho")
+	if err != nil {
+		return nil, err
+	}
+	if err := devdata.CreateDefaultAccounts(ctx, db, env, time.Now()); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
 }
 
 func serve(args []string) error {
 	s := newSettings("serve")
+	s.allowMemory = true
 	s.fs.StringVar(&s.addr, "addr", "", "backend listen address host:port (SEIICHO_ADDR)")
 	if err := s.resolve(args); err != nil {
 		return err
@@ -152,7 +216,7 @@ func serve(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	db, err := store.Open(ctx, s.db)
+	db, err := openServeStore(ctx, s.env, s.db)
 	if err != nil {
 		return err
 	}
@@ -173,7 +237,7 @@ func serve(args []string) error {
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", s.addr, err)
 	}
-	logger.Info("listening", "addr", ln.Addr().String(), "env", s.env, "version", seiicho.Version().String())
+	logger.Info("listening", "addr", ln.Addr().String(), "env", s.env, "db", s.db, "version", seiicho.Version().String())
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
