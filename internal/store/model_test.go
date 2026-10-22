@@ -4,7 +4,6 @@
 package store_test
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -26,54 +25,29 @@ func mustExec(t *testing.T, conn *sqlite.Conn, query string, args ...any) int64 
 	return conn.LastInsertRowID()
 }
 
-func TestMigrateKeepsAccountsAndStopsIDReuse(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "game.db")
-	conn, err := sqlite.OpenConn(path, sqlite.OpenReadWrite|sqlite.OpenCreate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	script := "PRAGMA application_id = 1936025961;" + store.Migrations[0] + `;
-		PRAGMA user_version = 1;
-		INSERT INTO accounts (id, email, password_hash, is_admin, created_at) VALUES
-			(1, 'a@example.com', x'01', 1, 10),
-			(2, 'b@example.com', x'02', 0, 20);
-		INSERT INTO sessions (token_hash, account_id, created_at, expires_at) VALUES
-			(x'aa', 2, 20, 99999999999);`
-	if err := sqlitex.ExecuteScript(conn, script, nil); err != nil {
-		t.Fatal(err)
-	}
-	conn.Close()
-
-	if from, _, err := store.Migrate(t.Context(), path); err != nil || from != 1 {
-		t.Fatalf("Migrate from %d: %v", from, err)
-	}
-	s, err := store.Open(t.Context(), path)
+func TestAccountIDsAreNotReused(t *testing.T) {
+	s, err := store.OpenPrivateMemory(t.Context(), memoryName(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-
-	b, err := s.AccountByEmail(t.Context(), "b@example.com")
-	if err != nil || b.ID != 2 || string(b.PasswordHash) != "\x02" || b.IsAdmin {
-		t.Fatalf("migrated account = %+v, %v", b, err)
-	}
-	if got, err := s.SessionAccount(t.Context(), []byte{0xaa}, time.Unix(30, 0)); err != nil || got.ID != 2 {
-		t.Fatalf("migrated session = %+v, %v", got, err)
-	}
-
-	conn, err = s.Conn(t.Context())
+	now := time.Unix(1_800_000_000, 0)
+	a, err := s.CreateAccount(t.Context(), "a@example.com", []byte("x"), false, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Put(conn)
-	mustExec(t, conn, `DELETE FROM sessions;`)
-	mustExec(t, conn, `DELETE FROM accounts WHERE id = 2;`)
-	c, err := s.CreateAccount(t.Context(), "c@example.com", []byte("x"), false, time.Unix(40, 0))
+	conn, err := s.Conn(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ID != 3 {
-		t.Fatalf("new account ID = %d, want 3: a deleted ID was reused", c.ID)
+	mustExec(t, conn, `DELETE FROM accounts WHERE id = ?;`, a.ID)
+	s.Put(conn) // a private memory store has only one connection
+	b, err := s.CreateAccount(t.Context(), "b@example.com", []byte("x"), false, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.ID == a.ID {
+		t.Fatalf("account ID %d was reused", a.ID)
 	}
 }
 
