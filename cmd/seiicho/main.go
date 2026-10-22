@@ -13,6 +13,7 @@
 //	seiicho show-account [--env ENV] [--db PATH] --email EMAIL [--json]
 //	seiicho list-games [--env ENV] [--db PATH] [--json]
 //	seiicho list-seats [--env ENV] [--db PATH] --game ID [--json]
+//	seiicho show-histogram [--env ENV] [--db PATH] --game ID (--planets-per-star | --planets-per-star-system) [--json]
 //	seiicho version
 //
 // --env and --db resolve as described in internal/settings. Every command
@@ -55,6 +56,14 @@
 // account's ID and email, whether it is a gamemaster or player seat, whether
 // it is active, and when it was created (in UTC). It fails if there is no such
 // game.
+//
+// show-histogram prints a histogram of a game's cluster: with
+// --planets-per-star, how many stars have each number of planets; with
+// --planets-per-star-system, how many star systems do. Give exactly one of
+// them. Each row is a number of planets, from the fewest to the most, its
+// count, and a bar of that many #s; numbers that no star or system has are
+// listed with a count of 0. A game with no cluster has no rows. It fails if
+// there is no such game.
 //
 // Commands named list print a table, and commands named show print a single
 // record. With --json, a list command prints a JSON array instead, and a show
@@ -106,6 +115,7 @@ func run(ctx context.Context, args []string) error {
 			showAccountCommand(),
 			listGamesCommand(),
 			listSeatsCommand(),
+			showHistogramCommand(),
 			{
 				Name:      "version",
 				Usage:     "seiicho version",
@@ -326,11 +336,21 @@ func (s *outputSettings) print(v any, rows [][]string) error {
 		enc.SetIndent("", "  ")
 		return enc.Encode(v)
 	}
-	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	var b strings.Builder
+	w := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 	for _, row := range rows {
 		fmt.Fprintln(w, strings.Join(row, "\t"))
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	// An empty last cell leaves the padding of the cell before it.
+	for line := range strings.Lines(b.String()) {
+		if _, err := io.WriteString(stdout, strings.TrimRight(line, " \n")+"\n"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // accountJSON is an account as list-accounts and show-account print it.
@@ -509,4 +529,60 @@ func yesNo(b bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+// histogramJSON is a histogram as show-histogram prints it.
+type histogramJSON struct {
+	GameID    int64     `json:"game_id"`
+	Histogram string    `json:"histogram"`
+	Bins      []binJSON `json:"bins"`
+}
+
+type binJSON struct {
+	Planets int `json:"planets"`
+	Count   int `json:"count"`
+}
+
+func showHistogramCommand() *ff.Command {
+	s := newOutputSettings("show-histogram")
+	game := s.Flags.Int64Config(ff.FlagConfig{
+		LongName: "game", Placeholder: "ID", NoDefault: true, Usage: "ID of the game (required)",
+	}, 0)
+	perStar := s.Flags.BoolLong("planets-per-star", "show the number of planets per star")
+	perSystem := s.Flags.BoolLong("planets-per-star-system", "show the number of planets per star system")
+	return &ff.Command{
+		Name:      "show-histogram",
+		Usage:     "seiicho show-histogram [--env ENV] [--db PATH] --game ID (--planets-per-star | --planets-per-star-system) [--json]",
+		ShortHelp: "show a histogram of a game's cluster",
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			gameID := *game
+			if gameID <= 0 {
+				return errors.New("--game is required and must be a positive game ID")
+			}
+			if *perStar == *perSystem {
+				return errors.New("give exactly one of --planets-per-star or --planets-per-star-system")
+			}
+			db, err := open(ctx, s.Settings)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			name, unit, histogram := "planets-per-star", "STARS", db.PlanetsPerStar
+			if *perSystem {
+				name, unit, histogram = "planets-per-star-system", "SYSTEMS", db.PlanetsPerSystem
+			}
+			bins, err := histogram(ctx, gameID)
+			if err != nil {
+				return fmt.Errorf("game %d: %w", gameID, err)
+			}
+			out := histogramJSON{GameID: gameID, Histogram: name, Bins: make([]binJSON, 0, len(bins))}
+			rows := [][]string{{"PLANETS", unit, ""}}
+			for _, b := range bins {
+				out.Bins = append(out.Bins, binJSON{Planets: b.Planets, Count: b.Count})
+				rows = append(rows, []string{fmt.Sprint(b.Planets), fmt.Sprint(b.Count), strings.Repeat("#", b.Count)})
+			}
+			return s.print(out, rows)
+		}),
+	}
 }

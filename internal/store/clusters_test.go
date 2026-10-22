@@ -4,8 +4,11 @@
 package store_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -203,5 +206,71 @@ func TestPlanets(t *testing.T) {
 	}
 	if err := exec(t, conn, insert, star+1, 3, "rocky"); sqlite.ErrCode(err) != sqlite.ResultConstraintForeignKey {
 		t.Errorf("planet of a missing star = %v, want a foreign key error", err)
+	}
+}
+
+func TestPlanetHistograms(t *testing.T) {
+	s, err := store.OpenPrivateMemory(t.Context(), memoryName(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(1_800_000_000, 0)
+	if _, err := s.CreateAccount(t.Context(), "admin@example.com", []byte("x"), true, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PlanetsPerStar(t.Context(), 1); !errors.Is(err, store.ErrGameNotFound) {
+		t.Errorf("PlanetsPerStar of a missing game = %v, want ErrGameNotFound", err)
+	}
+	if _, err := s.PlanetsPerSystem(t.Context(), 1); !errors.Is(err, store.ErrGameNotFound) {
+		t.Errorf("PlanetsPerSystem of a missing game = %v, want ErrGameNotFound", err)
+	}
+	g, err := s.CreateGame(t.Context(), 1, 2, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bins, err := s.PlanetsPerStar(t.Context(), g.ID); err != nil || len(bins) != 0 {
+		t.Errorf("PlanetsPerStar without a cluster = %v, %v; want no bins", bins, err)
+	}
+	stars, planets, err := s.GenerateCluster(t.Context(), g.ID, store.ClusterOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Tally the generated cluster to compare with the stored one.
+	perStar := map[int]int{}
+	perSystem := map[[3]int]int{}
+	for _, p := range planets {
+		st := stars[p.Star]
+		perStar[p.Star]++
+		perSystem[[3]int{st.X, st.Y, st.Z}]++
+	}
+	for _, tc := range []struct {
+		name      string
+		histogram func(context.Context, int64) ([]store.Bin, error)
+		counts    []int
+	}{
+		{"PlanetsPerStar", s.PlanetsPerStar, slices.Collect(maps.Values(perStar))},
+		{"PlanetsPerSystem", s.PlanetsPerSystem, slices.Collect(maps.Values(perSystem))},
+	} {
+		want := map[int]int{}
+		for _, n := range tc.counts {
+			want[n]++
+		}
+		bins, err := tc.histogram(t.Context(), g.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(bins) == 0 || bins[0].Planets != slices.Min(tc.counts) || bins[len(bins)-1].Planets != slices.Max(tc.counts) {
+			t.Fatalf("%s = %v, want bins from %d to %d", tc.name, bins, slices.Min(tc.counts), slices.Max(tc.counts))
+		}
+		for i, b := range bins {
+			if b.Planets != bins[0].Planets+i {
+				t.Errorf("%s: bin %d is for %d planets, want %d", tc.name, i, b.Planets, bins[0].Planets+i)
+			}
+			if b.Count != want[b.Planets] {
+				t.Errorf("%s: %d have %d planets, want %d", tc.name, b.Count, b.Planets, want[b.Planets])
+			}
+		}
 	}
 }

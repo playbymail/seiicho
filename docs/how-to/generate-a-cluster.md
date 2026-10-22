@@ -33,6 +33,27 @@ in all. The stars in each system are lettered from `A`.
 Every star has at least one planet and at most 10, in orbits numbered from 1
 with no gaps: 721 planets in all. Each planet is rocky.
 
+## Check how the planets are spread
+
+To see how many stars have each number of planets, run `show-histogram`:
+
+```sh
+go run ./cmd/seiicho show-histogram --env development --db tmp/seiicho.db --game 1 --planets-per-star
+```
+
+```text
+PLANETS  STARS
+1        8      ########
+2        13     #############
+3        29     #############################
+...
+```
+
+Use `--planets-per-star-system` instead to count the planets in each star
+system, all the stars at one set of coordinates. Give one of the two flags;
+add `--json` for the output described in
+[seiicho JSON output](../reference/seiicho-json.md).
+
 ## Choose the order rows are stored in
 
 By default the command stores stars sorted by their coordinates and letter,

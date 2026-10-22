@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strconv"
@@ -381,6 +382,99 @@ func TestListEmptyJSON(t *testing.T) {
 		got, err := capture(t, cmd, "--env", "test", "--db", path, "--json")
 		if err != nil || got != "[]\n" {
 			t.Errorf("%s --json = %q, %v; want []", cmd, got, err)
+		}
+	}
+}
+
+func TestShowHistogram(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "game.db")
+	db, err := store.Create(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateAccount(t.Context(), "admin@example.com", []byte("x"), true, time.Unix(1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	flags := []string{"--env", "test", "--db", path}
+	if err := run(t.Context(), append([]string{"create-game", "--seed", "0x0123456789abcdef"}, flags...)); err != nil {
+		t.Fatal(err)
+	}
+	args := func(extra ...string) []string {
+		return append(append([]string{"show-histogram"}, flags...), extra...)
+	}
+
+	if _, err := capture(t, args("--planets-per-star")...); err == nil || !strings.Contains(err.Error(), "--game is required") {
+		t.Errorf("without --game = %v, want --game is required", err)
+	}
+	for _, extra := range [][]string{{"--game", "1"}, {"--game", "1", "--planets-per-star", "--planets-per-star-system"}} {
+		if _, err := capture(t, args(extra...)...); err == nil || !strings.Contains(err.Error(), "exactly one") {
+			t.Errorf("%v = %v, want exactly one histogram", extra, err)
+		}
+	}
+	if _, err := capture(t, args("--game", "2", "--planets-per-star")...); !errors.Is(err, store.ErrGameNotFound) {
+		t.Errorf("missing game = %v, want ErrGameNotFound", err)
+	}
+	if got, err := capture(t, args("--game", "1", "--planets-per-star")...); err != nil || got != "PLANETS  STARS\n" {
+		t.Errorf("without a cluster = %q, %v; want only the header", got, err)
+	}
+	if err := run(t.Context(), append([]string{"generate-cluster", "--game", "1"}, flags...)); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		flag, unit string
+		total      int
+	}{
+		{"--planets-per-star", "STARS", 159},
+		{"--planets-per-star-system", "SYSTEMS", 100},
+	} {
+		got, err := capture(t, args("--game", "1", tc.flag)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+		if fields := strings.Fields(lines[0]); len(fields) != 2 || fields[0] != "PLANETS" || fields[1] != tc.unit {
+			t.Errorf("%s header = %q", tc.flag, lines[0])
+		}
+		count, planets := 0, 0
+		for _, line := range lines[1:] {
+			if strings.HasSuffix(line, " ") {
+				t.Errorf("%s line %q has trailing spaces", tc.flag, line)
+			}
+			fields := strings.Fields(line)
+			p, _ := strconv.Atoi(fields[0])
+			n, _ := strconv.Atoi(fields[1])
+			bar := ""
+			if len(fields) == 3 {
+				bar = fields[2]
+			}
+			if bar != strings.Repeat("#", n) {
+				t.Errorf("%s line %q has the wrong bar", tc.flag, line)
+			}
+			count += n
+			planets += p * n
+		}
+		if count != tc.total || planets != 721 {
+			t.Errorf("%s counts %d with %d planets, want %d with 721", tc.flag, count, planets, tc.total)
+		}
+
+		got, err = capture(t, args("--game", "1", tc.flag, "--json")...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			GameID    int64  `json:"game_id"`
+			Histogram string `json:"histogram"`
+			Bins      []struct {
+				Planets, Count int
+			} `json:"bins"`
+		}
+		if err := json.Unmarshal([]byte(got), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.GameID != 1 || "--"+out.Histogram != tc.flag || len(out.Bins) != len(lines)-1 {
+			t.Errorf("%s --json = %s", tc.flag, got)
 		}
 	}
 }

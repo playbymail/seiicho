@@ -41,3 +41,20 @@ Printed by `list-seats`, which includes inactive seats.
 | `is_gm` | boolean | Whether it is a gamemaster seat; otherwise a player seat |
 | `is_active` | boolean | Whether the seat is active |
 | `created_at` | string | When the seat was created |
+
+## Histogram
+
+Printed by `show-histogram`.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `game_id` | number | Game ID |
+| `histogram` | string | `planets-per-star` or `planets-per-star-system` |
+| `bins` | array of bins | One bin per number of planets, from the fewest to the most, including bins with a count of 0; `[]` if the game has no cluster |
+
+Each bin has these fields:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `planets` | number | Number of planets |
+| `count` | number | Number of stars, or star systems, with that many planets |
