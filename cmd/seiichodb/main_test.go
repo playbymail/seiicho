@@ -18,9 +18,9 @@ import (
 	"github.com/playbymail/seiicho/internal/store"
 )
 
-func TestResolveRejectsMemoryDatabase(t *testing.T) {
+func TestRejectsMemoryDatabase(t *testing.T) {
 	for _, env := range []string{"development", "agent", "test", "production"} {
-		err := resolve(settings.New("cmd"), []string{"--env", env, "--db", settings.MemoryDB})
+		err := run(t.Context(), []string{"migrate", "--env", env, "--db", settings.MemoryDB})
 		if err == nil || !strings.Contains(err.Error(), "only seiichod accepts") {
 			t.Errorf("%s = %v, want rejection", env, err)
 		}
@@ -97,18 +97,20 @@ func TestSetActive(t *testing.T) {
 		}
 		return a.IsActive
 	}
-	flags := func(email string) []string { return []string{"--env", "test", "--db", path, "--email", email} }
+	flags := func(cmd, email string) []string {
+		return []string{cmd, "--env", "test", "--db", path, "--email", email}
+	}
 
-	if err := setActive(flags(" Player@Example.com "), false); err != nil || isActive() {
+	if err := run(t.Context(), flags("deactivate", " Player@Example.com ")); err != nil || isActive() {
 		t.Fatalf("deactivate = %v, active = %v", err, isActive())
 	}
-	if err := setActive(flags("player@example.com"), true); err != nil || !isActive() {
+	if err := run(t.Context(), flags("activate", "player@example.com")); err != nil || !isActive() {
 		t.Fatalf("activate = %v, active = %v", err, isActive())
 	}
-	if err := setActive(flags("nobody@example.com"), false); err == nil || !strings.Contains(err.Error(), "account not found") {
+	if err := run(t.Context(), flags("deactivate", "nobody@example.com")); err == nil || !strings.Contains(err.Error(), "account not found") {
 		t.Errorf("deactivate a missing account = %v, want account not found", err)
 	}
-	if err := setActive([]string{"--env", "test", "--db", path}, false); err == nil || !strings.Contains(err.Error(), "--email is required") {
+	if err := run(t.Context(), []string{"deactivate", "--env", "test", "--db", path}); err == nil || !strings.Contains(err.Error(), "--email is required") {
 		t.Errorf("deactivate without --email = %v", err)
 	}
 }

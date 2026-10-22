@@ -34,6 +34,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/peterbourgon/ff/v4"
 	"github.com/playbymail/seiicho"
 	"github.com/playbymail/seiicho/internal/devdata"
 	"github.com/playbymail/seiicho/internal/server"
@@ -44,7 +45,7 @@ import (
 const defaultAddr = "127.0.0.1:18443"
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	if err := run(context.Background(), os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "seiichod: %v\n", err)
 		os.Exit(1)
 	}
@@ -71,25 +72,37 @@ func resolve(s *settings.Settings, addr string) (config, error) {
 	return c, nil
 }
 
-func run(args []string) error {
+// run parses args and runs the server until it is interrupted.
+func run(ctx context.Context, args []string) error {
 	s := settings.New("seiichod")
-	var addr string
-	var version bool
-	s.FlagSet.StringVar(&addr, "addr", "", "backend listen address host:port (SEIICHO_ADDR)")
-	s.FlagSet.BoolVar(&version, "version", false, "print the version and exit")
-	if err := s.Parse(args); err != nil {
-		return err
-	}
-	if version {
-		fmt.Println(seiicho.Version().String())
-		return nil
-	}
-	c, err := resolve(s, addr)
-	if err != nil {
-		return err
-	}
+	addr := s.Flags.StringConfig(ff.FlagConfig{
+		LongName: "addr", Placeholder: "HOST:PORT", NoDefault: true,
+		Usage: "backend listen address (SEIICHO_ADDR, default " + defaultAddr + ")",
+	}, "")
+	version := s.Flags.BoolLong("version", "print the version and exit")
+	return settings.Run(ctx, &ff.Command{
+		Name:      "seiichod",
+		Usage:     "seiichod [--env ENV] [--db PATH] [--addr HOST:PORT]",
+		ShortHelp: "run the Seiicho web server",
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			if *version {
+				fmt.Println(seiicho.Version().String())
+				return nil
+			}
+			c, err := resolve(s, *addr)
+			if err != nil {
+				return err
+			}
+			return serve(ctx, c)
+		}),
+	}, args)
+}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+// serve opens the database and serves HTTP until ctx ends or the process is
+// interrupted.
+func serve(ctx context.Context, c config) error {
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	db, err := openStore(ctx, c.env, c.db)

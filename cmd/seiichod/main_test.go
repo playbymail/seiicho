@@ -28,7 +28,7 @@ func TestResolveMemoryDatabase(t *testing.T) {
 		{"production", "only allowed in development and agent"},
 	} {
 		s := settings.New("seiichod")
-		if err := s.Parse([]string{"--env", tc.env, "--db", settings.MemoryDB}); err != nil {
+		if err := s.Flags.Parse([]string{"--env", tc.env, "--db", settings.MemoryDB}); err != nil {
 			t.Fatal(err)
 		}
 		_, err := resolve(s, "")

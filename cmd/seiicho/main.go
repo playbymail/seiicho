@@ -34,47 +34,49 @@ import (
 	"os"
 	"time"
 
+	"github.com/peterbourgon/ff/v4"
 	"github.com/playbymail/seiicho"
 	"github.com/playbymail/seiicho/internal/settings"
 	"github.com/playbymail/seiicho/internal/store"
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	if err := run(context.Background(), os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "seiicho: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: seiicho create-game|add-seat|promote-seat|version [flags]")
-	}
-	switch cmd, args := args[0], args[1:]; cmd {
-	case "create-game":
-		return createGame(args)
-	case "add-seat":
-		return addSeat(args)
-	case "promote-seat":
-		return promoteSeat(args)
-	case "version":
-		fmt.Println(seiicho.Version().String())
-		return nil
-	default:
-		return fmt.Errorf("unknown command %q", cmd)
-	}
+// run builds the command tree and runs the command that args select.
+func run(ctx context.Context, args []string) error {
+	return settings.Run(ctx, &ff.Command{
+		Name:      "seiicho",
+		Usage:     "seiicho <command> [flags]",
+		ShortHelp: "command-line interface to the game engine",
+		Subcommands: []*ff.Command{
+			createGameCommand(),
+			addSeatCommand(),
+			promoteSeatCommand(),
+			{
+				Name:      "version",
+				Usage:     "seiicho version",
+				ShortHelp: "print the version",
+				Exec: settings.NoArgs(func(context.Context) error {
+					fmt.Println(seiicho.Version().String())
+					return nil
+				}),
+			},
+		},
+	}, args)
 }
 
-// open parses and resolves the settings and opens the database file.
-func open(ctx context.Context, s *settings.Settings, args []string) (*store.Store, error) {
-	if err := s.Parse(args); err != nil {
-		return nil, err
-	}
+// open resolves the settings and opens the database file.
+func open(ctx context.Context, s *settings.Settings) (*store.Store, error) {
 	if err := s.Resolve(); err != nil {
 		return nil, err
 	}
 	if s.DB == settings.MemoryDB {
-		return nil, fmt.Errorf("%s: %s needs a database file; only seiichod accepts an in-memory database", s.DB, s.FlagSet.Name())
+		return nil, fmt.Errorf("%s: %s needs a database file; only seiichod accepts an in-memory database", s.DB, s.Flags.GetName())
 	}
 	db, err := store.Open(ctx, s.DB)
 	if errors.Is(err, store.ErrSchemaOutdated) {
@@ -83,79 +85,112 @@ func open(ctx context.Context, s *settings.Settings, args []string) (*store.Stor
 	return db, err
 }
 
-// openSeat is open for commands that take required --game and --account
-// flags. Register any further flags on s before calling it.
-func openSeat(ctx context.Context, s *settings.Settings, args []string) (db *store.Store, gameID, accountID int64, err error) {
-	s.FlagSet.Int64Var(&gameID, "game", 0, "ID of the game")
-	s.FlagSet.Int64Var(&accountID, "account", 0, "ID of the account")
-	db, err = open(ctx, s, args)
-	if err != nil {
-		return nil, 0, 0, err
+func createGameCommand() *ff.Command {
+	s := settings.New("create-game")
+	return &ff.Command{
+		Name:      "create-game",
+		Usage:     "seiicho create-game [--env ENV] [--db PATH]",
+		ShortHelp: "create a game with the senior active administrator as gamemaster",
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			db, err := open(ctx, s)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			g, err := db.CreateGame(ctx, time.Now())
+			if err != nil {
+				return err
+			}
+			fmt.Printf("created game %d with gamemaster %s (seat %d)\n", g.ID, g.GM.Email, g.SeatID)
+			return nil
+		}),
 	}
-	if gameID <= 0 {
-		err = errors.New("--game is required and must be a positive game ID")
-	} else if accountID <= 0 {
-		err = errors.New("--account is required and must be a positive account ID")
-	}
-	if err != nil {
-		db.Close()
-		return nil, 0, 0, err
-	}
-	return db, gameID, accountID, nil
 }
 
-func createGame(args []string) error {
-	ctx := context.Background()
-	db, err := open(ctx, settings.New("create-game"), args)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	g, err := db.CreateGame(ctx, time.Now())
-	if err != nil {
-		return err
-	}
-	fmt.Printf("created game %d with gamemaster %s (seat %d)\n", g.ID, g.GM.Email, g.SeatID)
-	return nil
+// seatSettings are the settings of a command that takes required --game and
+// --account flags. open sets gameID and accountID.
+type seatSettings struct {
+	*settings.Settings
+	gameID, accountID int64
+	game, account     *int64
 }
 
-func addSeat(args []string) error {
-	ctx := context.Background()
-	s := settings.New("add-seat")
+func newSeatSettings(name string) *seatSettings {
+	s := &seatSettings{Settings: settings.New(name)}
+	s.game = s.Flags.Int64Config(ff.FlagConfig{
+		LongName: "game", Placeholder: "ID", NoDefault: true, Usage: "ID of the game (required)",
+	}, 0)
+	s.account = s.Flags.Int64Config(ff.FlagConfig{
+		LongName: "account", Placeholder: "ID", NoDefault: true, Usage: "ID of the account (required)",
+	}, 0)
+	return s
+}
+
+// open checks the IDs, then resolves the settings and opens the database.
+func (s *seatSettings) open(ctx context.Context) (*store.Store, error) {
+	s.gameID, s.accountID = *s.game, *s.account
+	if s.gameID <= 0 {
+		return nil, errors.New("--game is required and must be a positive game ID")
+	}
+	if s.accountID <= 0 {
+		return nil, errors.New("--account is required and must be a positive account ID")
+	}
+	return open(ctx, s.Settings)
+}
+
+func addSeatCommand() *ff.Command {
+	s := newSeatSettings("add-seat")
 	var isGM bool
-	s.FlagSet.BoolVar(&isGM, "gamemaster", false, "seat the account as a gamemaster")
-	db, gameID, accountID, err := openSeat(ctx, s, args)
-	if err != nil {
-		return err
+	s.Flags.BoolVar(&isGM, 0, "gamemaster", "seat the account as a gamemaster")
+	return &ff.Command{
+		Name:      "add-seat",
+		Usage:     "seiicho add-seat [--env ENV] [--db PATH] --game ID --account ID [--gamemaster]",
+		ShortHelp: "seat an account in a game",
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			db, err := s.open(ctx)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			seatID, err := db.AddSeat(ctx, s.gameID, s.accountID, isGM, time.Now())
+			if err != nil {
+				return fmt.Errorf("game %d, account %d: %w", s.gameID, s.accountID, err)
+			}
+			role := "player"
+			if isGM {
+				role = "gamemaster"
+			}
+			fmt.Printf("seated account %d in game %d as %s (seat %d)\n", s.accountID, s.gameID, role, seatID)
+			return nil
+		}),
 	}
-	defer db.Close()
-	seatID, err := db.AddSeat(ctx, gameID, accountID, isGM, time.Now())
-	if err != nil {
-		return fmt.Errorf("game %d, account %d: %w", gameID, accountID, err)
-	}
-	role := "player"
-	if isGM {
-		role = "gamemaster"
-	}
-	fmt.Printf("seated account %d in game %d as %s (seat %d)\n", accountID, gameID, role, seatID)
-	return nil
 }
 
-func promoteSeat(args []string) error {
-	ctx := context.Background()
-	db, gameID, accountID, err := openSeat(ctx, settings.New("promote-seat"), args)
-	if err != nil {
-		return err
+func promoteSeatCommand() *ff.Command {
+	s := newSeatSettings("promote-seat")
+	return &ff.Command{
+		Name:      "promote-seat",
+		Usage:     "seiicho promote-seat [--env ENV] [--db PATH] --game ID --account ID",
+		ShortHelp: "make an account's seat in a game a gamemaster seat",
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			db, err := s.open(ctx)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			seatID, promoted, err := db.PromoteSeat(ctx, s.gameID, s.accountID)
+			if err != nil {
+				return fmt.Errorf("game %d, account %d: %w", s.gameID, s.accountID, err)
+			}
+			if promoted {
+				fmt.Printf("promoted account %d to gamemaster in game %d (seat %d)\n", s.accountID, s.gameID, seatID)
+			} else {
+				fmt.Printf("account %d is already a gamemaster in game %d (seat %d)\n", s.accountID, s.gameID, seatID)
+			}
+			return nil
+		}),
 	}
-	defer db.Close()
-	seatID, promoted, err := db.PromoteSeat(ctx, gameID, accountID)
-	if err != nil {
-		return fmt.Errorf("game %d, account %d: %w", gameID, accountID, err)
-	}
-	if promoted {
-		fmt.Printf("promoted account %d to gamemaster in game %d (seat %d)\n", accountID, gameID, seatID)
-	} else {
-		fmt.Printf("account %d is already a gamemaster in game %d (seat %d)\n", accountID, gameID, seatID)
-	}
-	return nil
 }

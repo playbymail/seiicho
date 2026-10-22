@@ -31,6 +31,9 @@ path. To drop `--db`, set `SEIICHO_DB` in your untracked
 Each setting resolves from an explicit flag, then the environment (including the
 files loaded by `internal/dotenv`), then the default.
 
+Long flags take two dashes (`--db`, not `-db`). Every command and subcommand
+prints its flags with `-h` or `--help`, for example `seiicho add-seat --help`.
+
 | Flag | Environment | Default | Meaning |
 | --- | --- | --- | --- |
 | `--env` | `SEIICHO_ENV` | required | `development`, `test`, `production`, or `agent` |

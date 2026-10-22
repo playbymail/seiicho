@@ -39,6 +39,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/peterbourgon/ff/v4"
 	"github.com/playbymail/seiicho"
 	"github.com/playbymail/seiicho/internal/auth"
 	"github.com/playbymail/seiicho/internal/devdata"
@@ -48,68 +49,75 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	if err := run(context.Background(), os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "seiichodb: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: seiichodb create|migrate|set-password|activate|deactivate|version [flags]")
-	}
-	switch cmd, args := args[0], args[1:]; cmd {
-	case "create":
-		return create(args)
-	case "migrate":
-		return migrate(args)
-	case "set-password":
-		return setPassword(args)
-	case "activate":
-		return setActive(args, true)
-	case "deactivate":
-		return setActive(args, false)
-	case "version":
-		fmt.Println(seiicho.Version().String())
-		return nil
-	default:
-		return fmt.Errorf("unknown command %q", cmd)
-	}
+// run builds the command tree and runs the command that args select.
+func run(ctx context.Context, args []string) error {
+	return settings.Run(ctx, &ff.Command{
+		Name:      "seiichodb",
+		Usage:     "seiichodb <command> [flags]",
+		ShortHelp: "create, migrate, and update Seiicho databases",
+		Subcommands: []*ff.Command{
+			createCommand(),
+			migrateCommand(),
+			setPasswordCommand(),
+			setActiveCommand(true),
+			setActiveCommand(false),
+			{
+				Name:      "version",
+				Usage:     "seiichodb version",
+				ShortHelp: "print the version",
+				Exec: settings.NoArgs(func(context.Context) error {
+					fmt.Println(seiicho.Version().String())
+					return nil
+				}),
+			},
+		},
+	}, args)
 }
 
-// resolve parses and resolves the settings and rejects the in-memory database.
-func resolve(s *settings.Settings, args []string) error {
-	if err := s.Parse(args); err != nil {
-		return err
-	}
+// resolve resolves the settings and rejects the in-memory database.
+func resolve(s *settings.Settings) error {
 	if err := s.Resolve(); err != nil {
 		return err
 	}
 	if s.DB == settings.MemoryDB {
-		return fmt.Errorf("%s: %s needs a database file; only seiichod accepts an in-memory database", s.DB, s.FlagSet.Name())
+		return fmt.Errorf("%s: %s needs a database file; only seiichod accepts an in-memory database", s.DB, s.Flags.GetName())
 	}
 	return nil
 }
 
-func create(args []string) error {
+func createCommand() *ff.Command {
 	s := settings.New("create")
-	if err := resolve(s, args); err != nil {
-		return err
+	return &ff.Command{
+		Name:      "create",
+		Usage:     "seiichodb create [--env ENV] [--db PATH]",
+		ShortHelp: "create a new database file",
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			if err := resolve(s); err != nil {
+				return err
+			}
+			db, err := createStore(ctx, s.Env, s.DB)
+			if err != nil {
+				return err
+			}
+			if err := db.Close(); err != nil {
+				return err
+			}
+			fmt.Printf("created database %s\n", s.DB)
+			if devdata.Allowed(s.Env) {
+				for _, a := range devdata.DefaultAccounts {
+					fmt.Printf("created default account %s\n", a.Email)
+				}
+			}
+			return nil
+		}),
 	}
-	db, err := createStore(context.Background(), s.Env, s.DB)
-	if err != nil {
-		return err
-	}
-	if err := db.Close(); err != nil {
-		return err
-	}
-	fmt.Printf("created database %s\n", s.DB)
-	if devdata.Allowed(s.Env) {
-		for _, a := range devdata.DefaultAccounts {
-			fmt.Printf("created default account %s\n", a.Email)
-		}
-	}
-	return nil
 }
 
 // createStore creates a persistent database, adding the default accounts in
@@ -132,36 +140,58 @@ func createStore(ctx context.Context, env, path string) (*store.Store, error) {
 	return db, nil
 }
 
-func migrate(args []string) error {
+func migrateCommand() *ff.Command {
 	s := settings.New("migrate")
-	if err := resolve(s, args); err != nil {
-		return err
+	return &ff.Command{
+		Name:      "migrate",
+		Usage:     "seiichodb migrate [--env ENV] [--db PATH]",
+		ShortHelp: "apply pending schema migrations",
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			if err := resolve(s); err != nil {
+				return err
+			}
+			from, to, err := store.Migrate(ctx, s.DB)
+			if err != nil {
+				return err
+			}
+			if from == to {
+				fmt.Printf("database %s is current at schema version %d\n", s.DB, to)
+			} else {
+				fmt.Printf("migrated database %s from schema version %d to %d\n", s.DB, from, to)
+			}
+			return nil
+		}),
 	}
-	from, to, err := store.Migrate(context.Background(), s.DB)
-	if err != nil {
-		return err
-	}
-	if from == to {
-		fmt.Printf("database %s is current at schema version %d\n", s.DB, to)
-	} else {
-		fmt.Printf("migrated database %s from schema version %d to %d\n", s.DB, from, to)
-	}
-	return nil
 }
 
-// resolveEmail is resolve for commands that take a required --email flag.
-// It returns the normalized email.
-func resolveEmail(s *settings.Settings, args []string) (string, error) {
-	var email string
-	s.FlagSet.StringVar(&email, "email", "", "email address of the account")
-	if err := resolve(s, args); err != nil {
-		return "", err
+// emailSettings are the settings of a command that takes a required --email
+// flag. resolve sets email, normalized.
+type emailSettings struct {
+	*settings.Settings
+	email string
+	flag  *string
+}
+
+func newEmailSettings(name string) *emailSettings {
+	s := &emailSettings{Settings: settings.New(name)}
+	s.flag = s.Flags.StringConfig(ff.FlagConfig{
+		LongName: "email", Placeholder: "EMAIL", NoDefault: true,
+		Usage: "email address of the account (required)",
+	}, "")
+	return s
+}
+
+// resolve is resolve for commands that take --email. It normalizes the email.
+func (s *emailSettings) resolve() error {
+	if err := resolve(s.Settings); err != nil {
+		return err
 	}
-	email = strings.ToLower(strings.TrimSpace(email))
-	if email == "" {
-		return "", errors.New("--email is required")
+	s.email = strings.ToLower(strings.TrimSpace(*s.flag))
+	if s.email == "" {
+		return errors.New("--email is required")
 	}
-	return email, nil
+	return nil
 }
 
 // openStore opens an existing database, suggesting a migration if its schema
@@ -174,67 +204,79 @@ func openStore(ctx context.Context, path string) (*store.Store, error) {
 	return db, err
 }
 
-func setActive(args []string, active bool) error {
-	name := "deactivate"
+func setActiveCommand(active bool) *ff.Command {
+	name, help := "deactivate", "stop an account from signing in and end its sessions"
 	if active {
-		name = "activate"
+		name, help = "activate", "let an account sign in again"
 	}
-	s := settings.New(name)
-	email, err := resolveEmail(s, args)
-	if err != nil {
-		return err
+	s := newEmailSettings(name)
+	return &ff.Command{
+		Name:      name,
+		Usage:     "seiichodb " + name + " [--env ENV] [--db PATH] --email EMAIL",
+		ShortHelp: help,
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			if err := s.resolve(); err != nil {
+				return err
+			}
+			db, err := openStore(ctx, s.DB)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			if err := db.SetAccountActive(ctx, s.email, active); errors.Is(err, store.ErrNotFound) {
+				return fmt.Errorf("%s: account not found", s.email)
+			} else if err != nil {
+				return err
+			}
+			if active {
+				fmt.Printf("activated %s\n", s.email)
+			} else {
+				fmt.Printf("deactivated %s and ended its sessions\n", s.email)
+			}
+			return nil
+		}),
 	}
-	ctx := context.Background()
-	db, err := openStore(ctx, s.DB)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-	if err := db.SetAccountActive(ctx, email, active); errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf("%s: account not found", email)
-	} else if err != nil {
-		return err
-	}
-	if active {
-		fmt.Printf("activated %s\n", email)
-	} else {
-		fmt.Printf("deactivated %s and ended its sessions\n", email)
-	}
-	return nil
 }
 
-func setPassword(args []string) error {
-	s := settings.New("set-password")
-	email, err := resolveEmail(s, args)
-	if err != nil {
-		return err
-	}
+func setPasswordCommand() *ff.Command {
+	s := newEmailSettings("set-password")
+	return &ff.Command{
+		Name:      "set-password",
+		Usage:     "seiichodb set-password [--env ENV] [--db PATH] --email EMAIL",
+		ShortHelp: "set an account's password from standard input and end its sessions",
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			if err := s.resolve(); err != nil {
+				return err
+			}
 
-	password, err := readPassword()
-	if err != nil {
-		return err
-	}
-	if password == "" {
-		return errors.New("password must not be empty")
-	}
-	hash, err := auth.HashPassword(password)
-	if err != nil {
-		return err
-	}
+			password, err := readPassword()
+			if err != nil {
+				return err
+			}
+			if password == "" {
+				return errors.New("password must not be empty")
+			}
+			hash, err := auth.HashPassword(password)
+			if err != nil {
+				return err
+			}
 
-	ctx := context.Background()
-	db, err := openStore(ctx, s.DB)
-	if err != nil {
-		return err
+			db, err := openStore(ctx, s.DB)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			if err := db.SetPassword(ctx, s.email, hash); errors.Is(err, store.ErrNotFound) {
+				return fmt.Errorf("%s: account not found", s.email)
+			} else if err != nil {
+				return err
+			}
+			fmt.Printf("updated password for %s and ended its sessions\n", s.email)
+			return nil
+		}),
 	}
-	defer db.Close()
-	if err := db.SetPassword(ctx, email, hash); errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf("%s: account not found", email)
-	} else if err != nil {
-		return err
-	}
-	fmt.Printf("updated password for %s and ended its sessions\n", email)
-	return nil
 }
 
 // readPassword reads a password from standard input, prompting without echo
