@@ -26,6 +26,16 @@ files loaded by `internal/dotenv`), then the default.
 
 `create-database` requires a new file; `serve` requires an existing one.
 
+## Changing a password
+
+```sh
+go run ./cmd/seiicho set-password --env development --email admin@example.com
+```
+
+The new password is read from standard input: a terminal gets a prompt that
+does not echo, and piped input supplies the first line. Changing a password
+ends all of that account's sessions.
+
 ## Routes
 
 | Route | Purpose |

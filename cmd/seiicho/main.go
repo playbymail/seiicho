@@ -7,6 +7,7 @@
 //
 //	seiicho create-database [--env ENV] [--db PATH]
 //	seiicho serve [--env ENV] [--db PATH] [--addr HOST:PORT]
+//	seiicho set-password [--env ENV] [--db PATH] --email EMAIL
 //	seiicho version
 //
 // Settings resolve from an explicit flag, then the environment (including
@@ -15,26 +16,35 @@
 //	--env   SEIICHO_ENV   required: development, test, production, or agent
 //	--db    SEIICHO_DB    required: path to the SQLite database file
 //	--addr  SEIICHO_ADDR  backend listen address, default 127.0.0.1:18443
+//
+// set-password reads the new password from standard input: it prompts without
+// echo on a terminal, and otherwise reads the first line. The password is
+// never accepted as a flag, so it stays out of shell history and process lists.
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/playbymail/seiicho"
+	"github.com/playbymail/seiicho/internal/auth"
 	"github.com/playbymail/seiicho/internal/dotenv"
 	"github.com/playbymail/seiicho/internal/server"
 	"github.com/playbymail/seiicho/internal/store"
+	"golang.org/x/term"
 )
 
 const defaultAddr = "127.0.0.1:18443"
@@ -48,13 +58,15 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: seiicho create-database|serve|version [flags]")
+		return errors.New("usage: seiicho create-database|serve|set-password|version [flags]")
 	}
 	switch cmd, args := args[0], args[1:]; cmd {
 	case "create-database":
 		return createDatabase(args)
 	case "serve":
 		return serve(args)
+	case "set-password":
+		return setPassword(args)
 	case "version":
 		fmt.Println(seiicho.Version().String())
 		return nil
@@ -174,6 +186,74 @@ func serve(args []string) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+func setPassword(args []string) error {
+	s := newSettings("set-password")
+	var email string
+	s.fs.StringVar(&email, "email", "", "email address of the account")
+	if err := s.resolve(args); err != nil {
+		return err
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return errors.New("--email is required")
+	}
+
+	password, err := readPassword()
+	if err != nil {
+		return err
+	}
+	if password == "" {
+		return errors.New("password must not be empty")
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	db, err := store.Open(ctx, s.db)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := db.SetPassword(ctx, email, hash); errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("%s: account not found", email)
+	} else if err != nil {
+		return err
+	}
+	fmt.Printf("updated password for %s and ended its sessions\n", email)
+	return nil
+}
+
+// readPassword reads a password from standard input, prompting without echo
+// when it is a terminal.
+func readPassword() (string, error) {
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil && !(errors.Is(err, io.EOF) && line != "") {
+			return "", fmt.Errorf("read password: %w", err)
+		}
+		return strings.TrimRight(line, "\r\n"), nil
+	}
+	fmt.Fprint(os.Stderr, "New password: ")
+	first, err := term.ReadPassword(fd)
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprint(os.Stderr, "Confirm password: ")
+	second, err := term.ReadPassword(fd)
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", err
+	}
+	if string(first) != string(second) {
+		return "", errors.New("passwords do not match")
+	}
+	return string(first), nil
 }
 
 // validateAddr requires a host:port address with a numeric port.

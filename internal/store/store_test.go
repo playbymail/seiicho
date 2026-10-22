@@ -294,6 +294,54 @@ func TestSessions(t *testing.T) {
 	}
 }
 
+func TestSetPassword(t *testing.T) {
+	s, err := store.OpenPrivateMemory(t.Context(), memoryName(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(1_800_000_000, 0)
+	a, err := s.CreateAccount(t.Context(), "a@example.com", []byte("old"), true, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.CreateAccount(t.Context(), "b@example.com", []byte("other"), false, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sess := range []struct {
+		token []byte
+		id    int64
+	}{{[]byte("a1"), a.ID}, {[]byte("a2"), a.ID}, {[]byte("b1"), b.ID}} {
+		if err := s.CreateSession(t.Context(), sess.token, sess.id, now, now.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := s.SetPassword(t.Context(), "A@Example.com", []byte("new")); err != nil {
+		t.Fatalf("SetPassword: %v", err)
+	}
+	got, err := s.AccountByEmail(t.Context(), "a@example.com")
+	if err != nil || string(got.PasswordHash) != "new" || !got.IsAdmin {
+		t.Fatalf("account = %+v, %v", got, err)
+	}
+	for _, token := range []string{"a1", "a2"} {
+		if _, err := s.SessionAccount(t.Context(), []byte(token), now); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("session %s survived the password change: %v", token, err)
+		}
+	}
+	if _, err := s.SessionAccount(t.Context(), []byte("b1"), now); err != nil {
+		t.Errorf("another account's session ended: %v", err)
+	}
+	if other, _ := s.AccountByEmail(t.Context(), "b@example.com"); string(other.PasswordHash) != "other" {
+		t.Error("another account's password changed")
+	}
+
+	if err := s.SetPassword(t.Context(), "nobody@example.com", []byte("x")); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("SetPassword for a missing account = %v, want ErrNotFound", err)
+	}
+}
+
 // assertInvariants borrows several connections at once and checks each one.
 func assertInvariants(t *testing.T, s *store.Store, journalMode string) {
 	t.Helper()
