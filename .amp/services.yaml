@@ -1,10 +1,11 @@
 services:
   seiicho:
-    # create-database refuses an existing file, so only run it on a fresh orb.
+    # seiichodb create refuses an existing file, so only run it on a fresh orb;
+    # otherwise migrate, because seiichod refuses an out-of-date schema.
     command: >-
       mkdir -p tmp &&
-      { test -e "$SEIICHO_DB" || go run ./cmd/seiicho create-database; } &&
-      exec go run ./cmd/seiicho serve --addr "0.0.0.0:$PORT"
+      if test -e "$SEIICHO_DB"; then go run ./cmd/seiichodb migrate; else go run ./cmd/seiichodb create; fi &&
+      exec go run ./cmd/seiichod --addr "0.0.0.0:$PORT"
     env:
       SEIICHO_ENV: agent
       SEIICHO_DB: tmp/seiicho-agent.db

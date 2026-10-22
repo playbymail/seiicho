@@ -3,9 +3,11 @@
 
 // Package store implements persistent storage in SQLite.
 //
-// Persistent databases are created with Create and opened with Open; the two
-// operations are deliberately distinct. Both verify that the file belongs to
-// this application before making any change to it.
+// Persistent databases are created with Create, brought up to date with
+// Migrate, and opened with Open; the operations are deliberately distinct.
+// Open never changes the schema: it rejects a database that needs migrating.
+// All three verify that the file belongs to this application before making
+// any change to it.
 package store
 
 import (
@@ -33,11 +35,21 @@ const (
 	ErrInvalidMemoryName = cerrs.Error("invalid memory database name")
 	ErrNotFound          = cerrs.Error("not found")
 	ErrAccountExists     = cerrs.Error("account already exists")
+	ErrSchemaOutdated    = cerrs.Error("database schema is out of date")
+	ErrSchemaTooNew      = cerrs.Error("database schema is newer than this application")
 )
+
+// connPool is the part of a ZombieZen pool that a Store uses. Migration pools
+// back created and in-memory databases; plain pools back opened ones.
+type connPool interface {
+	Take(ctx context.Context) (*sqlite.Conn, error)
+	Put(conn *sqlite.Conn)
+	Close() error
+}
 
 // Store is a handle to an initialized, migrated database.
 type Store struct {
-	pool *sqlitemigration.Pool
+	pool connPool
 	// anchor keeps a shared memory database alive for the store's lifetime.
 	anchor *sqlite.Conn
 }
@@ -96,34 +108,107 @@ func Create(ctx context.Context, path string) (*Store, error) {
 	return s, nil
 }
 
-// Open opens an existing persistent database at path and applies any pending
-// migrations. It never creates the file or its parent directory.
+// Open opens an existing persistent database at path. The schema must be
+// current; Open returns ErrSchemaOutdated rather than applying migrations.
+// It never creates the file or its parent directory.
 func Open(ctx context.Context, path string) (*Store, error) {
-	if err := validatePath(path); err != nil {
-		return nil, err
-	}
-	sb, err := os.Stat(path)
+	version, err := probe(path)
 	if err != nil {
 		return nil, err
 	}
-	if !sb.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s: %w", path, ErrNotRegularFile)
+	if err := checkVersion(version); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 
-	// Check ownership before anything (including WAL) can modify the file.
-	conn, err := sqlite.OpenConn(path, sqlite.OpenReadWrite)
+	prepare := prepareConn("wal")
+	pool, err := sqlitex.NewPool(path, sqlitex.PoolOptions{
+		Flags: sqlite.OpenReadWrite,
+		PrepareConn: func(conn *sqlite.Conn) error {
+			if err := prepare(conn); err != nil {
+				return err
+			}
+			version, err := pragmaInt(conn, "user_version")
+			if err != nil {
+				return err
+			}
+			return checkVersion(int(version))
+		},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+	conn, err := pool.Take(ctx)
+	if err != nil {
+		_ = pool.Close()
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	pool.Put(conn)
+	return &Store{pool: pool}, nil
+}
+
+// Migrate applies any pending migrations to the existing persistent database
+// at path and reports the schema versions before and after. It never creates
+// the file or its parent directory.
+func Migrate(ctx context.Context, path string) (from, to int, err error) {
+	from, err = probe(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	if from > len(schema.Migrations) {
+		return from, from, fmt.Errorf("%s: version %d: %w", path, from, ErrSchemaTooNew)
+	}
+	s, err := openPool(ctx, path, sqlite.OpenReadWrite, 0, prepareConn("wal"))
+	if err != nil {
+		return from, from, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := s.Close(); err != nil {
+		return from, len(schema.Migrations), err
+	}
+	return from, len(schema.Migrations), nil
+}
+
+// probe checks that path is an existing database file owned by this
+// application, before anything (including WAL) can modify it, and returns
+// its schema version.
+func probe(path string) (int, error) {
+	if err := validatePath(path); err != nil {
+		return 0, err
+	}
+	sb, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	if !sb.Mode().IsRegular() {
+		return 0, fmt.Errorf("%s: %w", path, ErrNotRegularFile)
+	}
+
+	conn, err := sqlite.OpenConn(path, sqlite.OpenReadWrite)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", path, err)
+	}
 	err = checkApplicationID(conn)
+	var version int64
+	if err == nil {
+		version, err = pragmaInt(conn, "user_version")
+	}
 	if cerr := conn.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return 0, fmt.Errorf("%s: %w", path, err)
 	}
+	return int(version), nil
+}
 
-	return openPool(ctx, path, sqlite.OpenReadWrite, 0, prepareConn("wal"))
+// checkVersion requires the schema version that this application expects.
+func checkVersion(version int) error {
+	switch want := len(schema.Migrations); {
+	case version < want:
+		return fmt.Errorf("version %d, want %d: %w", version, want, ErrSchemaOutdated)
+	case version > want:
+		return fmt.Errorf("version %d, want %d: %w", version, want, ErrSchemaTooNew)
+	}
+	return nil
 }
 
 // memoryNamePattern restricts memory database names to characters that need
@@ -194,7 +279,7 @@ func (s *Store) Ping(ctx context.Context) error {
 }
 
 // validatePath rejects SQLite URIs and the private memory name so that
-// persistent Create and Open always operate on a literal file.
+// persistent Create, Migrate, and Open always operate on a literal file.
 func validatePath(path string) error {
 	if path == "" || path == ":memory:" || strings.HasPrefix(path, "file:") {
 		return fmt.Errorf("%q: invalid database path", path)

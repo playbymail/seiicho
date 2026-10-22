@@ -51,8 +51,9 @@ proxy connection is not permission to change Caddy configuration.
 - `.agents/setup` only installs Go and dependencies; it does not configure
   networking or start servers. Keep long-running web services supervised by Amp,
   not started from setup. The `seiicho` service in `.amp/services.yaml` runs
-  `serve` in the `agent` environment on `0.0.0.0:$PORT`, creating
-  `tmp/seiicho-agent.db` on first start.
+  `seiichod` in the `agent` environment on `0.0.0.0:$PORT`, first running
+  `seiichodb create` for `tmp/seiicho-agent.db` on a fresh orb and `seiichodb
+  migrate` otherwise.
 - Amp documents forwarding the public `Host` and standard forwarded HTTPS
   headers. Verify actual Origin and Fetch Metadata handling, normal forms, and
   HTMX submissions once the server exists; do not assume proxy compatibility

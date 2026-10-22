@@ -17,7 +17,7 @@ request headers, hostname, or a query parameter.
 ## Default accounts
 
 Every new database in `development` or `agent` starts with these accounts:
-databases made by `create-database`, and each in-memory database.
+databases made by `seiichodb create`, and each in-memory database.
 
 | Email | Password | Admin |
 | --- | --- | --- |
@@ -35,10 +35,10 @@ databases made by `create-database`, and each in-memory database.
 
 ## In-memory databases
 
-`serve --db :memory:` runs against a fresh, private in-memory database that is
-discarded when the server stops. Reject `:memory:` outside `development` and
-`agent`. `create-database` and `set-password` always require a database file,
-because an in-memory database would vanish when they exit.
+`seiichod --db :memory:` runs against a fresh, private in-memory database that
+is discarded when the server stops. Reject `:memory:` outside `development` and
+`agent`. Every `seiichodb` command always requires a database file, because an
+in-memory database would vanish when it exits.
 
 ## HTTP helpers
 

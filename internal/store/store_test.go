@@ -6,6 +6,7 @@ package store_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -132,9 +133,12 @@ func TestOpenRejectsForeignDatabases(t *testing.T) {
 			if _, err := store.Open(t.Context(), path); !errors.Is(err, store.ErrNotOwned) {
 				t.Fatalf("Open = %v, want ErrNotOwned", err)
 			}
+			if _, _, err := store.Migrate(t.Context(), path); !errors.Is(err, store.ErrNotOwned) {
+				t.Fatalf("Migrate = %v, want ErrNotOwned", err)
+			}
 			assertContents(t, path, before)
 			if _, err := os.Stat(path + "-wal"); !errors.Is(err, fs.ErrNotExist) {
-				t.Fatalf("Open enabled WAL on a foreign database")
+				t.Fatalf("Open or Migrate enabled WAL on a foreign database")
 			}
 		})
 	}
@@ -150,6 +154,73 @@ func TestOpenRejectsInvalidFile(t *testing.T) {
 		t.Fatal("Open succeeded on an invalid file")
 	}
 	assertContents(t, path, data)
+}
+
+// ownedDatabase writes a database file that carries the application ID and
+// the given schema version but none of the migrations.
+func ownedDatabase(t *testing.T, version int) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "game.db")
+	conn, err := sqlite.OpenConn(path, sqlite.OpenReadWrite|sqlite.OpenCreate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	script := fmt.Sprintf("PRAGMA application_id = %d; PRAGMA user_version = %d;", 0x73656969, version)
+	if err := sqlitex.ExecuteScript(conn, script, nil); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestOpenRejectsOutdatedSchema(t *testing.T) {
+	path := ownedDatabase(t, 0)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Open(t.Context(), path); !errors.Is(err, store.ErrSchemaOutdated) {
+		t.Fatalf("Open = %v, want ErrSchemaOutdated", err)
+	}
+	assertContents(t, path, before)
+}
+
+func TestMigrateThenOpen(t *testing.T) {
+	path := ownedDatabase(t, 0)
+	from, to, err := store.Migrate(t.Context(), path)
+	if err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if from != 0 || to < 1 {
+		t.Fatalf("Migrate = %d -> %d, want 0 -> current", from, to)
+	}
+	s, err := store.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("Open after Migrate: %v", err)
+	}
+	if _, err := s.AccountByEmail(t.Context(), "a@example.com"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("AccountByEmail = %v, want ErrNotFound", err)
+	}
+	s.Close()
+
+	if from, again, err := store.Migrate(t.Context(), path); err != nil || from != to || again != to {
+		t.Fatalf("second Migrate = %d -> %d, %v; want %d -> %d", from, again, err, to, to)
+	}
+}
+
+func TestRejectNewerSchema(t *testing.T) {
+	path := ownedDatabase(t, 1000)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Open(t.Context(), path); !errors.Is(err, store.ErrSchemaTooNew) {
+		t.Errorf("Open = %v, want ErrSchemaTooNew", err)
+	}
+	if _, _, err := store.Migrate(t.Context(), path); !errors.Is(err, store.ErrSchemaTooNew) {
+		t.Errorf("Migrate = %v, want ErrSchemaTooNew", err)
+	}
+	assertContents(t, path, before)
 }
 
 func TestPersistentConnectionInvariants(t *testing.T) {

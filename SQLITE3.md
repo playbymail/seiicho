@@ -37,8 +37,10 @@ const applicationID int32 = 0x73656969 // 1936025961, ASCII "seii"
 
 ## Separate creation and opening
 
-Provide distinct public methods for **Create** and **Open**, rather than an
-open-or-create method or a boolean that silently changes the operation.
+Provide distinct public methods for **Create**, **Migrate**, and **Open**,
+rather than an open-or-create method or a boolean that silently changes the
+operation. Only the `seiichodb` command creates or migrates a database; the
+`seiichod` server only opens one.
 
 ### Create a persistent database
 
@@ -58,10 +60,18 @@ open-or-create method or a boolean that silently changes the operation.
 - Require an existing file and an existing parent directory; never create either.
 - Use explicit `sqlite.OpenReadWrite` flags without `sqlite.OpenCreate` or
   `sqlite.OpenWAL` for the initial ownership check. Do not use zero/default flags.
-- After ownership is accepted, configure connection invariants and use ZombieZen
-  migrations to bring an older supported schema up to date. Reject unsupported
-  newer schemas rather than attempting a downgrade.
-- Preserve these no-create and ownership rules when constructing the pool, not
+- After ownership is accepted, require the current schema version and configure
+  connection invariants. Open must never apply migrations: reject an older
+  schema as out of date, and reject a newer one rather than attempting a
+  downgrade.
+
+### Migrate a persistent database
+
+- Apply the same no-create and ownership checks as Open before anything can
+  modify the file.
+- Use ZombieZen migrations to bring an older supported schema up to date.
+  Reject unsupported newer schemas rather than attempting a downgrade.
+- Preserve the no-create and ownership rules when constructing the pool, not
   just in an initial probe connection. Prefer literal filesystem paths; do not
   allow arbitrary SQLite URI parameters to bypass persistent Create/Open rules.
 
@@ -136,8 +146,8 @@ when testing actual WAL behavior or concurrency that depends on WAL.
 ## Verification expectations
 
 When implementing database support, test the observable contract: successful
-Create/Open and migrations; rejection of missing files, missing parents, existing
-Create targets, foreign IDs, ID `0`, and invalid files without adopting or
+Create, Migrate, and Open; Open's refusal to migrate an outdated schema;
+rejection of missing files, missing parents, existing Create targets, foreign IDs, ID `0`, and invalid files without adopting or
 modifying them; connection-wide WAL and foreign-key enforcement; private-memory
 isolation; named shared-memory sharing and lifetime; and parallel-test isolation.
 Use multiple simultaneously borrowed connections to verify pool-wide invariants.
