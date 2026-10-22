@@ -54,13 +54,20 @@ func (s *Store) AccountByEmail(ctx context.Context, email string) (Account, erro
 }
 
 // SetAccountActive activates or deactivates the account with the given email,
-// ignoring case. It returns ErrNotFound if there is no such account.
-func (s *Store) SetAccountActive(ctx context.Context, email string, active bool) error {
+// ignoring case. Deactivating an account also ends all of its sessions.
+// It returns ErrNotFound if there is no such account.
+func (s *Store) SetAccountActive(ctx context.Context, email string, active bool) (err error) {
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
 		return err
 	}
 	defer s.pool.Put(conn)
+
+	end, err := sqlitex.ImmediateTransaction(conn)
+	if err != nil {
+		return err
+	}
+	defer end(&err)
 
 	err = sqlitex.Execute(conn, `UPDATE accounts SET is_active = ? WHERE email = ?;`,
 		&sqlitex.ExecOptions{Args: []any{active, email}})
@@ -70,7 +77,12 @@ func (s *Store) SetAccountActive(ctx context.Context, email string, active bool)
 	if conn.Changes() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	if active {
+		return nil
+	}
+	return sqlitex.Execute(conn,
+		`DELETE FROM sessions WHERE account_id = (SELECT id FROM accounts WHERE email = ?);`,
+		&sqlitex.ExecOptions{Args: []any{email}})
 }
 
 // SetPassword replaces the password hash of the account with the given email,

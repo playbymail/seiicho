@@ -8,6 +8,8 @@
 //	seiichodb create [--env ENV] [--db PATH]
 //	seiichodb migrate [--env ENV] [--db PATH]
 //	seiichodb set-password [--env ENV] [--db PATH] --email EMAIL
+//	seiichodb activate [--env ENV] [--db PATH] --email EMAIL
+//	seiichodb deactivate [--env ENV] [--db PATH] --email EMAIL
 //	seiichodb version
 //
 // --env and --db resolve as described in internal/settings. Every command
@@ -22,6 +24,9 @@
 // set-password reads the new password from standard input: it prompts without
 // echo on a terminal, and otherwise reads the first line. The password is
 // never accepted as a flag, so it stays out of shell history and process lists.
+//
+// activate and deactivate set whether an account may sign in. Deactivating an
+// account also ends its sessions.
 package main
 
 import (
@@ -51,7 +56,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: seiichodb create|migrate|set-password|version [flags]")
+		return errors.New("usage: seiichodb create|migrate|set-password|activate|deactivate|version [flags]")
 	}
 	switch cmd, args := args[0], args[1:]; cmd {
 	case "create":
@@ -60,6 +65,10 @@ func run(args []string) error {
 		return migrate(args)
 	case "set-password":
 		return setPassword(args)
+	case "activate":
+		return setActive(args, true)
+	case "deactivate":
+		return setActive(args, false)
 	case "version":
 		fmt.Println(seiicho.Version().String())
 		return nil
@@ -140,16 +149,65 @@ func migrate(args []string) error {
 	return nil
 }
 
-func setPassword(args []string) error {
-	s := settings.New("set-password")
+// resolveEmail is resolve for commands that take a required --email flag.
+// It returns the normalized email.
+func resolveEmail(s *settings.Settings, args []string) (string, error) {
 	var email string
 	s.FlagSet.StringVar(&email, "email", "", "email address of the account")
 	if err := resolve(s, args); err != nil {
-		return err
+		return "", err
 	}
 	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" {
-		return errors.New("--email is required")
+		return "", errors.New("--email is required")
+	}
+	return email, nil
+}
+
+// openStore opens an existing database, suggesting a migration if its schema
+// is out of date.
+func openStore(ctx context.Context, path string) (*store.Store, error) {
+	db, err := store.Open(ctx, path)
+	if errors.Is(err, store.ErrSchemaOutdated) {
+		return nil, fmt.Errorf("%w (run seiichodb migrate)", err)
+	}
+	return db, err
+}
+
+func setActive(args []string, active bool) error {
+	name := "deactivate"
+	if active {
+		name = "activate"
+	}
+	s := settings.New(name)
+	email, err := resolveEmail(s, args)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	db, err := openStore(ctx, s.DB)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := db.SetAccountActive(ctx, email, active); errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("%s: account not found", email)
+	} else if err != nil {
+		return err
+	}
+	if active {
+		fmt.Printf("activated %s\n", email)
+	} else {
+		fmt.Printf("deactivated %s and ended its sessions\n", email)
+	}
+	return nil
+}
+
+func setPassword(args []string) error {
+	s := settings.New("set-password")
+	email, err := resolveEmail(s, args)
+	if err != nil {
+		return err
 	}
 
 	password, err := readPassword()
@@ -165,10 +223,8 @@ func setPassword(args []string) error {
 	}
 
 	ctx := context.Background()
-	db, err := store.Open(ctx, s.DB)
-	if errors.Is(err, store.ErrSchemaOutdated) {
-		return fmt.Errorf("%w (run seiichodb migrate)", err)
-	} else if err != nil {
+	db, err := openStore(ctx, s.DB)
+	if err != nil {
 		return err
 	}
 	defer db.Close()

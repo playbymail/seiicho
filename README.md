@@ -11,7 +11,8 @@ go run ./cmd/seiichod --env development --db tmp/seiicho.db
 ```
 
 There are three commands. `seiichodb` owns the database file: it creates it,
-applies schema migrations, and changes passwords. `seiichod` is the web server
+applies schema migrations, changes passwords, and activates and deactivates
+accounts. `seiichod` is the web server
 only; it never creates or migrates a database and refuses to start on one whose
 schema is out of date. `seiicho` is the command-line interface to the game
 engine; like the server, it only opens an existing, current database. After pulling a schema change, run:
@@ -36,8 +37,8 @@ files loaded by `internal/dotenv`), then the default.
 | `--db` | `SEIICHO_DB` | required | Path to the SQLite database file, or `:memory:` (see below) |
 | `--addr` | `SEIICHO_ADDR` | `127.0.0.1:18443` | Backend listen address (`host:port`; `seiichod` only) |
 
-`seiichodb create` requires a new file; `seiichodb migrate`, `seiichodb
-set-password`, `seiicho`, and `seiichod` require an existing one. Every command
+`seiichodb create` requires a new file; every other `seiichodb` command,
+`seiicho`, and `seiichod` require an existing one. Every command
 prints its version with `seiichodb version`, `seiicho version`, or `seiichod
 --version`.
 
@@ -61,6 +62,7 @@ ends all of that account's sessions.
 ## How-to guides
 
 - [How to create a game](docs/how-to/create-a-game.md)
+- [How to deactivate or reactivate an account](docs/how-to/deactivate-an-account.md)
 
 ## Routes
 

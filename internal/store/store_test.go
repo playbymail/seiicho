@@ -465,3 +465,51 @@ func assertContents(t *testing.T, path string, want []byte) {
 		t.Fatalf("%s was modified", path)
 	}
 }
+
+func TestSetAccountActive(t *testing.T) {
+	s, err := store.OpenPrivateMemory(t.Context(), memoryName(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(1_800_000_000, 0)
+	a, err := s.CreateAccount(t.Context(), "a@example.com", []byte("x"), false, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.CreateAccount(t.Context(), "b@example.com", []byte("x"), false, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.IsActive {
+		t.Fatal("new account is inactive")
+	}
+	for token, id := range map[string]int64{"a1": a.ID, "b1": b.ID} {
+		if err := s.CreateSession(t.Context(), []byte(token), id, now, now.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := s.SetAccountActive(t.Context(), "A@Example.com", false); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.AccountByEmail(t.Context(), "a@example.com"); err != nil || got.IsActive {
+		t.Fatalf("deactivated account = %+v, %v", got, err)
+	}
+	// Reactivating must not revive the sessions that deactivation ended.
+	if err := s.SetAccountActive(t.Context(), "a@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.AccountByEmail(t.Context(), "a@example.com"); err != nil || !got.IsActive {
+		t.Fatalf("reactivated account = %+v, %v", got, err)
+	}
+	if _, err := s.SessionAccount(t.Context(), []byte("a1"), now); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("session survived deactivation: %v", err)
+	}
+	if got, err := s.SessionAccount(t.Context(), []byte("b1"), now); err != nil || got.ID != b.ID {
+		t.Errorf("another account's session = %+v, %v", got, err)
+	}
+	if err := s.SetAccountActive(t.Context(), "nobody@example.com", true); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("missing account = %v, want ErrNotFound", err)
+	}
+}

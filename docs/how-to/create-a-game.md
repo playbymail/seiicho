@@ -44,10 +44,17 @@ again.
 
 ### `no active administrator`
 
-The database has no active administrator account. No command can activate an
-account or make one an administrator yet. In `development` or `agent`, create a
-new database with `seiichodb create`, which starts with the default
-administrator, and create the game there.
+The database has no active administrator account. If an administrator account
+exists but is inactive, activate it, then run `create-game` again:
+
+```sh
+go run ./cmd/seiichodb activate --env development --db tmp/seiicho.db --email admin@example.com
+```
+
+No command can make an account an administrator yet. If the database has no
+administrator account at all, in `development` or `agent` create a new database
+with `seiichodb create`, which starts with the default administrator, and
+create the game there.
 
 ### `database schema is out of date (run seiichodb migrate)`
 
