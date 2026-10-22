@@ -16,6 +16,8 @@ architecture, not a claim that these features are already implemented.
   pushes, and GitHub label creation are authorized under that workflow.
 - Read and follow [SQLITE3.md](SQLITE3.md) before working on persistence,
   migrations, or database tests.
+- Read and follow [PROXIES.md](PROXIES.md) before working on HTTP startup,
+  listener configuration, proxy integration, or CSRF protection.
 - Do not create GitHub Actions workflows or other GitHub CI actions.
 
 ## Application architecture
