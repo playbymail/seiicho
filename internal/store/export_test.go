@@ -14,3 +14,7 @@ func (s *Store) Conn(ctx context.Context) (*sqlite.Conn, error) { return s.pool.
 
 // Put returns a connection borrowed with Conn.
 func (s *Store) Put(conn *sqlite.Conn) { s.pool.Put(conn) }
+
+// Migrations are the schema's migration scripts, so tests can build a
+// database at an older version.
+var Migrations = schema.Migrations
