@@ -35,6 +35,7 @@ const (
 	ErrInvalidMemoryName = cerrs.Error("invalid memory database name")
 	ErrNotFound          = cerrs.Error("not found")
 	ErrAccountExists     = cerrs.Error("account already exists")
+	ErrNoActiveAdmin     = cerrs.Error("no active administrator")
 	ErrSchemaOutdated    = cerrs.Error("database schema is out of date")
 	ErrSchemaTooNew      = cerrs.Error("database schema is newer than this application")
 )

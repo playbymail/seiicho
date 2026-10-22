@@ -10,10 +10,11 @@ go run ./cmd/seiichodb create --env development --db tmp/seiicho.db
 go run ./cmd/seiichod --env development --db tmp/seiicho.db
 ```
 
-There are two commands. `seiichodb` owns the database file: it creates it,
+There are three commands. `seiichodb` owns the database file: it creates it,
 applies schema migrations, and changes passwords. `seiichod` is the web server
 only; it never creates or migrates a database and refuses to start on one whose
-schema is out of date. After pulling a schema change, run:
+schema is out of date. `seiicho` is the command-line interface to the game
+engine; like the server, it only opens an existing, current database. After pulling a schema change, run:
 
 ```sh
 go run ./cmd/seiichodb migrate --env development --db tmp/seiicho.db
@@ -36,8 +37,9 @@ files loaded by `internal/dotenv`), then the default.
 | `--addr` | `SEIICHO_ADDR` | `127.0.0.1:18443` | Backend listen address (`host:port`; `seiichod` only) |
 
 `seiichodb create` requires a new file; `seiichodb migrate`, `seiichodb
-set-password`, and `seiichod` require an existing one. Both commands print
-their version with `seiichodb version` or `seiichod --version`.
+set-password`, `seiicho`, and `seiichod` require an existing one. Every command
+prints its version with `seiichodb version`, `seiicho version`, or `seiichod
+--version`.
 
 ## Development conveniences
 
@@ -55,6 +57,16 @@ go run ./cmd/seiichodb set-password --env development --db tmp/seiicho.db --emai
 The new password is read from standard input: a terminal gets a prompt that
 does not echo, and piped input supplies the first line. Changing a password
 ends all of that account's sessions.
+
+## Creating a game
+
+```sh
+go run ./cmd/seiicho create-game --env development --db tmp/seiicho.db
+```
+
+This creates a game and gives a gamemaster seat to the senior active
+administrator: the one with the lowest account ID. It fails if there is no
+active administrator.
 
 ## Routes
 

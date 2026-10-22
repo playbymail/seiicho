@@ -18,6 +18,7 @@ var schema = sqlitemigration.Schema{
 			email         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
 			password_hash BLOB    NOT NULL,
 			is_admin      INTEGER NOT NULL DEFAULT 0 CHECK (is_admin IN (0, 1)),
+			is_active     INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
 			created_at    INTEGER NOT NULL
 		) STRICT;
 
