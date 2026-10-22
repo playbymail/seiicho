@@ -5,7 +5,7 @@ cookies, or CSRF protection. These are application requirements, not a claim tha
 an HTTP server has already been implemented.
 
 For development/agent-only POST account and login helpers, also follow
-[HTTP_TESTING.md](HTTP_TESTING.md). Keep their environment gating and the CSRF
+[TESTING.md](TESTING.md). Keep their environment gating and the CSRF
 requirements below intact.
 
 ## Caddy is externally managed

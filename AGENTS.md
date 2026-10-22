@@ -18,8 +18,8 @@ architecture, not a claim that these features are already implemented.
   migrations, or database tests.
 - Read and follow [PROXIES.md](PROXIES.md) before working on HTTP startup,
   listener configuration, proxy integration, or CSRF protection.
-- Read and follow [HTTP_TESTING.md](HTTP_TESTING.md) before implementing or using
-  HTTP account and login helpers for agent testing.
+- Read and follow [TESTING.md](TESTING.md) before using or changing the default
+  test accounts, in-memory databases, or the HTTP account and login helpers.
 - Do not create GitHub Actions workflows or other GitHub CI actions.
 
 ## Application architecture
@@ -43,7 +43,8 @@ architecture, not a claim that these features are already implemented.
 - Registration is **invite-only**. Enforce invitation validity on the server
   before creating an account; hiding a public registration link is insufficient.
   Do not introduce an unrestricted registration path. The environment-gated
-  testing helpers in [HTTP_TESTING.md](HTTP_TESTING.md) are the only exception.
+  default accounts and testing helpers in [TESTING.md](TESTING.md) are the only
+  exceptions.
 - Hash passwords with `golang.org/x/crypto/bcrypt`, explicitly passing
   **`bcrypt.MinCost`** to `bcrypt.GenerateFromPassword`. Verify passwords with
   `bcrypt.CompareHashAndPassword`; never store or log plaintext passwords.
@@ -53,7 +54,9 @@ architecture, not a claim that these features are already implemented.
 - Low risk does not remove basic web safeguards: enforce authentication and
   authorization on the server, protect state-changing browser requests against
   CSRF, escape rendered user content, and keep passwords and session credentials
-  out of logs and source control.
+  out of logs and source control. The only exception is the fixed, publicly
+  documented test credentials for the `development` and `agent` environments
+  listed in [TESTING.md](TESTING.md).
 
 ## Development and verification
 

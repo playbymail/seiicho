@@ -32,6 +32,7 @@ type DefaultAccount struct {
 }
 
 // DefaultAccounts lists the accounts that CreateDefaultAccounts creates.
+// TESTING.md documents them; keep the two in sync.
 var DefaultAccounts = []DefaultAccount{
 	{Email: "admin@example.com", Password: "bad-choices-2026", IsAdmin: true},
 	{Email: "acct01@example.com", Password: "worser-choices-2001"},

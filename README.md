@@ -28,22 +28,10 @@ files loaded by `internal/dotenv`), then the default.
 
 ## Development conveniences
 
-In the `development` and `agent` environments only:
-
-- `serve --db :memory:` runs against a fresh in-memory database that is
-  discarded when the server stops. Other environments reject it, and
-  `create-database` and `set-password` always need a file.
-- Every new database (from `create-database`, or in memory) starts with these
-  accounts. The passwords are public test values, not secrets.
-
-| Email | Password | Admin |
-| --- | --- | --- |
-| `admin@example.com` | `bad-choices-2026` | yes |
-| `acct01@example.com` | `worser-choices-2001` | no |
-| `acct02@example.com` | `worser-choices-2002` | no |
-
-Existing databases are never re-seeded, so changed or deleted default accounts
-stay that way.
+In the `development` and `agent` environments only, `serve --db :memory:` runs
+against a throwaway in-memory database, and every new database starts with an
+admin account (`admin@example.com` / `bad-choices-2026`) and two player
+accounts. See [TESTING.md](TESTING.md) for the full list and the HTTP helpers.
 
 ## Changing a password
 
@@ -64,4 +52,4 @@ ends all of that account's sessions.
 | `GET /api/healthz` | JSON status and version; 503 if the database is unavailable |
 
 In `development` and `agent` only, the testing helpers described in
-[HTTP_TESTING.md](HTTP_TESTING.md) are served under `/__dev` and `/__agent`.
+[TESTING.md](TESTING.md) are served under `/__dev` and `/__agent`.

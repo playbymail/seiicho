@@ -160,7 +160,7 @@ func (s *server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCreateAccount creates an account with a random password. It is a
-// development and agent testing helper; see HTTP_TESTING.md.
+// development and agent testing helper; see TESTING.md.
 func (s *server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 	email, ok := parseEmail(r.PathValue("email"))
 	if !ok {
@@ -194,7 +194,7 @@ func (s *server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleLogMeIn starts a session for an existing account without a password.
-// It is a development and agent testing helper; see HTTP_TESTING.md.
+// It is a development and agent testing helper; see TESTING.md.
 func (s *server) handleLogMeIn(w http.ResponseWriter, r *http.Request) {
 	email, ok := parseEmail(r.PathValue("email"))
 	if !ok {
