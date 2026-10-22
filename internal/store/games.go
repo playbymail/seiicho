@@ -142,6 +142,65 @@ func (s *Store) PromoteSeat(ctx context.Context, gameID, accountID int64) (seatI
 	return seatID, true, nil
 }
 
+// GameSummary describes a game for an operator.
+type GameSummary struct {
+	ID        int64
+	IsActive  bool
+	CreatedAt time.Time
+	// Seats counts the game's active seats.
+	Seats int
+	// Gamemasters are the emails of the accounts holding the game's active
+	// gamemaster seats, ordered by seat ID.
+	Gamemasters []string
+}
+
+// Games returns every game, active or not, ordered by ID.
+func (s *Store) Games(ctx context.Context) (games []GameSummary, err error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.pool.Put(conn)
+
+	// Read both queries from one snapshot.
+	defer sqlitex.Save(conn)(&err)
+
+	index := map[int64]int{}
+	err = sqlitex.Execute(conn,
+		`SELECT g.id, g.is_active, g.created_at,
+		        (SELECT count(*) FROM seats s WHERE s.game_id = g.id AND s.is_active = 1)
+		 FROM games g ORDER BY g.id;`,
+		&sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				index[stmt.ColumnInt64(0)] = len(games)
+				games = append(games, GameSummary{
+					ID:        stmt.ColumnInt64(0),
+					IsActive:  stmt.ColumnBool(1),
+					CreatedAt: time.Unix(stmt.ColumnInt64(2), 0),
+					Seats:     stmt.ColumnInt(3),
+				})
+				return nil
+			},
+		})
+	if err != nil {
+		return nil, err
+	}
+	err = sqlitex.Execute(conn,
+		`SELECT s.game_id, a.email FROM seats s JOIN accounts a ON a.id = s.account_id
+		 WHERE s.is_active = 1 AND s.is_gm = 1 ORDER BY s.id;`,
+		&sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				g := &games[index[stmt.ColumnInt64(0)]]
+				g.Gamemasters = append(g.Gamemasters, stmt.ColumnText(1))
+				return nil
+			},
+		})
+	if err != nil {
+		return nil, err
+	}
+	return games, nil
+}
+
 // checkGameAndAccount returns ErrGameNotFound, ErrGameInactive,
 // ErrAccountNotFound, or ErrAccountInactive unless both the game and the
 // account exist and are active.

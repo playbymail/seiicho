@@ -112,3 +112,64 @@ func TestAddAndPromoteSeat(t *testing.T) {
 		t.Errorf("promote-seat of a gamemaster = %v, want no-op", err)
 	}
 }
+
+// capture runs the command that args select and returns what it printed.
+func capture(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	var b strings.Builder
+	saved := stdout
+	stdout = &b
+	defer func() { stdout = saved }()
+	err := run(t.Context(), args)
+	return b.String(), err
+}
+
+func TestListAccountsAndGames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "game.db")
+	db, err := store.Create(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 22, 15, 4, 5, 0, time.UTC)
+	if _, err := db.CreateAccount(t.Context(), "admin@example.com", []byte("x"), true, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateAccount(t.Context(), "player@example.com", []byte("x"), false, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetAccountActive(t.Context(), "player@example.com", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateGame(t.Context(), now); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	flags := []string{"--env", "test", "--db", path}
+
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"list-accounts"}, "" +
+			"ID  EMAIL               ADMIN  ACTIVE\n" +
+			"1   admin@example.com   yes    yes\n" +
+			"2   player@example.com  no     no\n"},
+		{[]string{"list-accounts", "--email", " Player@Example.com "}, "" +
+			"ID  EMAIL               ADMIN  ACTIVE\n" +
+			"2   player@example.com  no     no\n"},
+		{[]string{"list-games"}, "" +
+			"ID  ACTIVE  CREATED              SEATS  GAMEMASTERS\n" +
+			"1   yes     2026-10-22 15:04:05  1      admin@example.com\n"},
+	} {
+		got, err := capture(t, append(tc.args, flags...)...)
+		if err != nil {
+			t.Errorf("%v = %v", tc.args, err)
+		} else if got != tc.want {
+			t.Errorf("%v printed\n%s\nwant\n%s", tc.args, got, tc.want)
+		}
+	}
+
+	if _, err := capture(t, append([]string{"list-accounts", "--email", "nobody@example.com"}, flags...)...); !errors.Is(err, store.ErrAccountNotFound) {
+		t.Errorf("list-accounts for a missing email = %v, want ErrAccountNotFound", err)
+	}
+}

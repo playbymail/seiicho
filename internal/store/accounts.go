@@ -155,27 +155,51 @@ func (s *Store) DeleteSession(ctx context.Context, tokenHash []byte) error {
 		&sqlitex.ExecOptions{Args: []any{tokenHash}})
 }
 
+// Accounts returns every account, active or not, ordered by ID.
+func (s *Store) Accounts(ctx context.Context) ([]Account, error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.pool.Put(conn)
+
+	return queryAccounts(conn,
+		`SELECT id, email, password_hash, is_admin, is_active FROM accounts ORDER BY id;`)
+}
+
+// queryAccount returns the first account that query selects, or ErrNotFound.
 func queryAccount(conn *sqlite.Conn, query string, args ...any) (Account, error) {
-	var a Account
-	found := false
+	accounts, err := queryAccounts(conn, query, args...)
+	if err != nil {
+		return Account{}, err
+	}
+	if len(accounts) == 0 {
+		return Account{}, ErrNotFound
+	}
+	return accounts[0], nil
+}
+
+// queryAccounts returns the accounts that query selects. The query must select
+// id, email, password_hash, is_admin, and is_active, in that order.
+func queryAccounts(conn *sqlite.Conn, query string, args ...any) ([]Account, error) {
+	var accounts []Account
 	err := sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
 		Args: args,
 		ResultFunc: func(stmt *sqlite.Stmt) error {
-			found = true
-			a.ID = stmt.ColumnInt64(0)
-			a.Email = stmt.ColumnText(1)
-			a.PasswordHash = make([]byte, stmt.ColumnLen(2))
+			a := Account{
+				ID:           stmt.ColumnInt64(0),
+				Email:        stmt.ColumnText(1),
+				PasswordHash: make([]byte, stmt.ColumnLen(2)),
+				IsAdmin:      stmt.ColumnBool(3),
+				IsActive:     stmt.ColumnBool(4),
+			}
 			stmt.ColumnBytes(2, a.PasswordHash)
-			a.IsAdmin = stmt.ColumnBool(3)
-			a.IsActive = stmt.ColumnBool(4)
+			accounts = append(accounts, a)
 			return nil
 		},
 	})
 	if err != nil {
-		return Account{}, err
+		return nil, err
 	}
-	if !found {
-		return Account{}, ErrNotFound
-	}
-	return a, nil
+	return accounts, nil
 }

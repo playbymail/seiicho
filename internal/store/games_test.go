@@ -5,6 +5,7 @@ package store_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -243,5 +244,88 @@ func TestAddAndPromoteSeat(t *testing.T) {
 	id, promoted, err = s.PromoteSeat(t.Context(), g.ID, gm.ID)
 	if err != nil || id != gmSeat || promoted {
 		t.Errorf("PromoteSeat, gamemaster = %d, %v, %v; want %d, false, nil", id, promoted, err, gmSeat)
+	}
+}
+
+func TestAccountsAndGames(t *testing.T) {
+	s, err := store.OpenPrivateMemory(t.Context(), memoryName(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if accounts, err := s.Accounts(t.Context()); err != nil || len(accounts) != 0 {
+		t.Errorf("Accounts of an empty database = %v, %v; want none", accounts, err)
+	}
+	if games, err := s.Games(t.Context()); err != nil || len(games) != 0 {
+		t.Errorf("Games of an empty database = %v, %v; want none", games, err)
+	}
+
+	now := time.Unix(1_800_000_000, 0)
+	create := func(email string, isAdmin bool) store.Account {
+		t.Helper()
+		a, err := s.CreateAccount(t.Context(), email, []byte("x"), isAdmin, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	admin := create("admin@example.com", true)
+	player := create("player@example.com", false)
+	gm := create("gm@example.com", false)
+	if err := s.SetAccountActive(t.Context(), player.Email, false); err != nil {
+		t.Fatal(err)
+	}
+
+	accounts, err := s.Accounts(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []store.Account{admin, {ID: player.ID, Email: player.Email, IsActive: false}, gm}
+	if len(accounts) != len(want) {
+		t.Fatalf("Accounts = %d accounts, want %d", len(accounts), len(want))
+	}
+	for i, a := range accounts {
+		if a.ID != want[i].ID || a.Email != want[i].Email || a.IsAdmin != want[i].IsAdmin || a.IsActive != want[i].IsActive {
+			t.Errorf("Accounts[%d] = %+v, want %+v", i, a, want[i])
+		}
+	}
+
+	first, err := s.CreateGame(t.Context(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAccountActive(t.Context(), player.Email, true); err != nil {
+		t.Fatal(err)
+	}
+	playerSeat, err := s.AddSeat(t.Context(), first.ID, player.ID, false, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddSeat(t.Context(), first.ID, gm.ID, true, now); err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.CreateGame(t.Context(), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Inactive seats are neither counted nor listed as gamemasters.
+	withConn(t, s, func(conn *sqlite.Conn) {
+		mustExec(t, conn, `UPDATE seats SET is_active = 0 WHERE id IN (?, ?);`, playerSeat, second.SeatID)
+		mustExec(t, conn, `UPDATE games SET is_active = 0 WHERE id = ?;`, second.ID)
+	})
+
+	games, err := s.Games(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(games) != 2 {
+		t.Fatalf("Games = %d games, want 2", len(games))
+	}
+	if g := games[0]; g.ID != first.ID || !g.IsActive || !g.CreatedAt.Equal(now) || g.Seats != 2 ||
+		strings.Join(g.Gamemasters, ",") != admin.Email+","+gm.Email {
+		t.Errorf("Games[0] = %+v, want active game %d with 2 seats and gamemasters %s, %s", g, first.ID, admin.Email, gm.Email)
+	}
+	if g := games[1]; g.ID != second.ID || g.IsActive || !g.CreatedAt.Equal(now.Add(time.Hour)) || g.Seats != 0 || len(g.Gamemasters) != 0 {
+		t.Errorf("Games[1] = %+v, want inactive game %d with no seats", g, second.ID)
 	}
 }

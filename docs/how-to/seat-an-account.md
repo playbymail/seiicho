@@ -8,9 +8,10 @@ seat a gamemaster seat with `seiicho promote-seat`.
 - The game must exist and be active. `seiicho create-game` prints a new game's
   ID; see [How to create a game](create-a-game.md).
 - The account must exist and be active. Both commands take the account's ID,
-  not its email. No command lists account IDs yet. In a new `development` or
-  `agent` database, the default accounts are `admin@example.com` (1),
-  `acct01@example.com` (2), and `acct02@example.com` (3).
+  not its email.
+
+To look up either ID, see
+[How to find account and game IDs](find-account-and-game-ids.md).
 
 If you leave out `--env` or `--db`, the commands use `SEIICHO_ENV` or
 `SEIICHO_DB` instead.
@@ -63,11 +64,11 @@ you gave, for example `game 1, account 2: account is inactive`.
 
 ### `game not found` or `game is inactive`
 
-Check the game ID. No command reactivates a game yet.
+Check the game ID with `seiicho list-games`. No command reactivates a game yet.
 
 ### `account not found` or `account is inactive`
 
-Check the account ID. To reactivate an account, see
+Check the account ID with `seiicho list-accounts`. To reactivate an account, see
 [How to deactivate or reactivate an account](deactivate-an-account.md).
 
 ### `account already has a seat in the game`

@@ -8,6 +8,8 @@
 //	seiicho create-game [--env ENV] [--db PATH]
 //	seiicho add-seat [--env ENV] [--db PATH] --game ID --account ID [--gamemaster]
 //	seiicho promote-seat [--env ENV] [--db PATH] --game ID --account ID
+//	seiicho list-accounts [--env ENV] [--db PATH] [--email EMAIL]
+//	seiicho list-games [--env ENV] [--db PATH]
 //	seiicho version
 //
 // --env and --db resolve as described in internal/settings. Every command
@@ -25,13 +27,24 @@
 // promote-seat makes an account's seat in a game a gamemaster seat. It fails
 // if the game or the account is missing or inactive, or if the account has no
 // active seat in the game. Promoting a gamemaster changes nothing.
+//
+// list-accounts prints every account's ID, email, and whether it is an
+// administrator and active. With --email it prints only the account with that
+// email, ignoring case, and fails if there is none.
+//
+// list-games prints every game's ID, whether it is active, when it was created
+// (in UTC), its number of active seats, and the emails of its active
+// gamemasters.
 package main
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/peterbourgon/ff/v4"
@@ -39,6 +52,9 @@ import (
 	"github.com/playbymail/seiicho/internal/settings"
 	"github.com/playbymail/seiicho/internal/store"
 )
+
+// stdout receives the listings, so that tests can capture them.
+var stdout io.Writer = os.Stdout
 
 func main() {
 	if err := run(context.Background(), os.Args[1:]); err != nil {
@@ -57,6 +73,8 @@ func run(ctx context.Context, args []string) error {
 			createGameCommand(),
 			addSeatCommand(),
 			promoteSeatCommand(),
+			listAccountsCommand(),
+			listGamesCommand(),
 			{
 				Name:      "version",
 				Usage:     "seiicho version",
@@ -193,4 +211,82 @@ func promoteSeatCommand() *ff.Command {
 			return nil
 		}),
 	}
+}
+
+func listAccountsCommand() *ff.Command {
+	s := settings.New("list-accounts")
+	email := s.Flags.StringConfig(ff.FlagConfig{
+		LongName: "email", Placeholder: "EMAIL", NoDefault: true,
+		Usage: "list only the account with this email address",
+	}, "")
+	return &ff.Command{
+		Name:      "list-accounts",
+		Usage:     "seiicho list-accounts [--env ENV] [--db PATH] [--email EMAIL]",
+		ShortHelp: "list accounts and their IDs",
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			db, err := open(ctx, s)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			var accounts []store.Account
+			if e := strings.ToLower(strings.TrimSpace(*email)); e != "" {
+				a, err := db.AccountByEmail(ctx, e)
+				if errors.Is(err, store.ErrNotFound) {
+					return fmt.Errorf("%s: %w", e, store.ErrAccountNotFound)
+				} else if err != nil {
+					return err
+				}
+				accounts = append(accounts, a)
+			} else if accounts, err = db.Accounts(ctx); err != nil {
+				return err
+			}
+			w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "ID\tEMAIL\tADMIN\tACTIVE")
+			for _, a := range accounts {
+				fmt.Fprintf(w, "%d\t%s\t%s\t%s\n", a.ID, a.Email, yesNo(a.IsAdmin), yesNo(a.IsActive))
+			}
+			return w.Flush()
+		}),
+	}
+}
+
+func listGamesCommand() *ff.Command {
+	s := settings.New("list-games")
+	return &ff.Command{
+		Name:      "list-games",
+		Usage:     "seiicho list-games [--env ENV] [--db PATH]",
+		ShortHelp: "list games and their IDs",
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			db, err := open(ctx, s)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			games, err := db.Games(ctx)
+			if err != nil {
+				return err
+			}
+			w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "ID\tACTIVE\tCREATED\tSEATS\tGAMEMASTERS")
+			for _, g := range games {
+				gms := strings.Join(g.Gamemasters, ",")
+				if gms == "" {
+					gms = "-"
+				}
+				fmt.Fprintf(w, "%d\t%s\t%s\t%d\t%s\n",
+					g.ID, yesNo(g.IsActive), g.CreatedAt.UTC().Format(time.DateTime), g.Seats, gms)
+			}
+			return w.Flush()
+		}),
+	}
+}
+
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
 }
