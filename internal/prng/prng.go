@@ -32,7 +32,9 @@
 // its first two outputs as the new (s1, s2). An empty path returns the source
 // itself.
 //
-// PCG returns math/rand/v2's PCG seeded with (s1, s2).
+// PCG returns math/rand/v2's PCG seeded with (s1, s2). PRNG wraps that PCG
+// in math/rand/v2's Rand; Roll(n, lo, hi) sums n draws of Rand.IntN(hi-lo+1)+lo,
+// one draw per die.
 package prng
 
 import "math/rand/v2"
@@ -44,6 +46,8 @@ type Node uint64
 const (
 	// Cluster is the source of a game's cluster of star systems.
 	Cluster Node = 1
+	// Planets is the source that allocates a cluster's planets to its stars.
+	Planets Node = 2
 )
 
 // Source is a node in a tree of deterministic random sources. The zero value
@@ -77,6 +81,31 @@ func (s Source) Child(path ...Node) Source {
 // sequence again.
 func (s Source) PCG() *rand.PCG {
 	return rand.NewPCG(s.s1, s.s2)
+}
+
+// PRNG returns a new PRNG seeded from s. Each call starts the same sequence
+// again.
+func (s Source) PRNG() *PRNG {
+	return &PRNG{r: rand.New(s.PCG())}
+}
+
+// PRNG rolls dice for the game engine.
+type PRNG struct {
+	r *rand.Rand
+}
+
+// Roll rolls numberOfDice dice, each giving lo through hi with equal
+// chance, and returns their sum. Each die draws from the random source. It
+// panics if numberOfDice < 1 or lo > hi.
+func (p *PRNG) Roll(numberOfDice, lo, hi int) int {
+	if numberOfDice < 1 || lo > hi {
+		panic("prng: invalid Roll")
+	}
+	sum := 0
+	for range numberOfDice {
+		sum += lo + p.r.IntN(hi-lo+1)
+	}
+	return sum
 }
 
 // splitMix64 advances state by one SplitMix64 step and returns the output.

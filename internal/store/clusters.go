@@ -12,20 +12,21 @@ import (
 	"zombiezen.com/go/sqlite/sqlitex"
 )
 
-// GenerateCluster generates a game's cluster from the game's seeds and stores
-// its stars, returning them in draw order. The game must exist and be active;
-// otherwise it returns ErrGameNotFound or ErrGameInactive. It returns
-// ErrClusterExists if the game already has stars. On error, it stores nothing.
-func (s *Store) GenerateCluster(ctx context.Context, gameID int64) (stars []cluster.Star, err error) {
+// GenerateCluster generates a game's cluster and its planets from the game's
+// seeds and stores them, returning the stars in draw order and the planets as
+// cluster.Planets orders them. The game must exist and be active; otherwise
+// it returns ErrGameNotFound or ErrGameInactive. It returns ErrClusterExists
+// if the game already has stars. On error, it stores nothing.
+func (s *Store) GenerateCluster(ctx context.Context, gameID int64) (stars []cluster.Star, planets []cluster.Planet, err error) {
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer s.pool.Put(conn)
 
 	end, err := sqlitex.ImmediateTransaction(conn)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer end(&err)
 
@@ -44,25 +45,38 @@ func (s *Store) GenerateCluster(ctx context.Context, gameID int64) (stars []clus
 			},
 		})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	switch {
 	case !found:
-		return nil, ErrGameNotFound
+		return nil, nil, ErrGameNotFound
 	case !active:
-		return nil, ErrGameInactive
+		return nil, nil, ErrGameInactive
 	case hasStars:
-		return nil, ErrClusterExists
+		return nil, nil, ErrClusterExists
 	}
 
-	stars = cluster.Generate(prng.New(seed1, seed2).Child(prng.Cluster).PCG())
-	for _, st := range stars {
+	root := prng.New(seed1, seed2)
+	stars = cluster.Generate(root.Child(prng.Cluster).PCG())
+	starIDs := make([]int64, len(stars))
+	for i, st := range stars {
 		err = sqlitex.Execute(conn,
 			`INSERT INTO stars (game_id, x, y, z, seq) VALUES (?, ?, ?, ?, ?);`,
 			&sqlitex.ExecOptions{Args: []any{gameID, st.X, st.Y, st.Z, st.Seq}})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+		starIDs[i] = conn.LastInsertRowID()
+	}
+
+	planets = cluster.Planets(stars, root.Child(prng.Planets).PRNG())
+	for _, p := range planets {
+		err = sqlitex.Execute(conn,
+			`INSERT INTO planets (star_id, orbit, kind) VALUES (?, ?, ?);`,
+			&sqlitex.ExecOptions{Args: []any{starIDs[p.Star], p.Orbit, p.Kind}})
+		if err != nil {
+			return nil, nil, err
 		}
 	}
-	return stars, nil
+	return stars, planets, nil
 }

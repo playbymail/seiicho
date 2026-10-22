@@ -52,18 +52,22 @@ func TestGenerateCluster(t *testing.T) {
 		{"missing game", 999, store.ErrGameNotFound},
 		{"inactive game", closed.ID, store.ErrGameInactive},
 	} {
-		if _, err := s.GenerateCluster(t.Context(), tc.gameID); !errors.Is(err, tc.want) {
+		if _, _, err := s.GenerateCluster(t.Context(), tc.gameID); !errors.Is(err, tc.want) {
 			t.Errorf("GenerateCluster, %s = %v, want %v", tc.name, err, tc.want)
 		}
 	}
 
-	stars, err := s.GenerateCluster(t.Context(), g.ID)
+	stars, planets, err := s.GenerateCluster(t.Context(), g.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := cluster.Generate(prng.New(seed1, seed2).Child(prng.Cluster).PCG())
 	if fmt.Sprint(stars) != fmt.Sprint(want) {
 		t.Error("GenerateCluster did not draw from the game's cluster source")
+	}
+	wantPlanets := cluster.Planets(want, prng.New(seed1, seed2).Child(prng.Planets).PRNG())
+	if fmt.Sprint(planets) != fmt.Sprint(wantPlanets) {
+		t.Error("GenerateCluster did not draw from the game's planets source")
 	}
 	var stored []cluster.Star
 	withConn(t, s, func(conn *sqlite.Conn) {
@@ -83,13 +87,43 @@ func TestGenerateCluster(t *testing.T) {
 	if fmt.Sprint(stored) != fmt.Sprint(want) {
 		t.Errorf("stored %d stars that differ from the %d generated", len(stored), len(want))
 	}
+	var storedPlanets []string
+	withConn(t, s, func(conn *sqlite.Conn) {
+		err := sqlitex.Execute(conn,
+			`SELECT s.x, s.y, s.z, s.seq, p.orbit, p.kind
+			 FROM planets p JOIN stars s ON s.id = p.star_id
+			 WHERE s.game_id = ? ORDER BY s.x, s.y, s.z, s.seq, p.orbit;`,
+			&sqlitex.ExecOptions{
+				Args: []any{g.ID},
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					storedPlanets = append(storedPlanets, fmt.Sprint(
+						stmt.ColumnInt(0), stmt.ColumnInt(1), stmt.ColumnInt(2), stmt.ColumnText(3),
+						stmt.ColumnInt(4), stmt.ColumnText(5)))
+					return nil
+				},
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	var generated []string
+	for _, p := range wantPlanets {
+		st := want[p.Star]
+		generated = append(generated, fmt.Sprint(st.X, st.Y, st.Z, st.Seq, p.Orbit, p.Kind))
+	}
+	if fmt.Sprint(storedPlanets) != fmt.Sprint(generated) {
+		t.Errorf("stored %d planets that differ from the %d generated", len(storedPlanets), len(generated))
+	}
 
-	if _, err := s.GenerateCluster(t.Context(), g.ID); !errors.Is(err, store.ErrClusterExists) {
+	if _, _, err := s.GenerateCluster(t.Context(), g.ID); !errors.Is(err, store.ErrClusterExists) {
 		t.Errorf("GenerateCluster again = %v, want ErrClusterExists", err)
 	}
 	withConn(t, s, func(conn *sqlite.Conn) {
 		if n := count(t, conn, `SELECT count(*) FROM stars;`); n != len(want) {
 			t.Errorf("%d stars, want %d (the failed attempts must add nothing)", n, len(want))
+		}
+		if n := count(t, conn, `SELECT count(*) FROM planets;`); n != len(wantPlanets) {
+			t.Errorf("%d planets, want %d (the failed attempts must add nothing)", n, len(wantPlanets))
 		}
 	})
 }
@@ -128,5 +162,36 @@ func TestStars(t *testing.T) {
 	}
 	if err := exec(t, conn, `INSERT INTO games (created_at) VALUES (1);`); sqlite.ErrCode(err) != sqlite.ResultConstraintNotNull {
 		t.Errorf("game without seeds = %v, want a not null constraint error", err)
+	}
+}
+
+func TestPlanets(t *testing.T) {
+	s, err := store.OpenPrivateMemory(t.Context(), memoryName(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	conn, err := s.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Put(conn)
+	game := mustExec(t, conn, `INSERT INTO games (seed1, seed2, created_at) VALUES (1, 2, 1);`)
+	star := mustExec(t, conn, `INSERT INTO stars (game_id, x, y, z, seq) VALUES (?, 0, 0, 0, 'A');`, game)
+
+	const insert = `INSERT INTO planets (star_id, orbit, kind) VALUES (?, ?, ?);`
+	mustExec(t, conn, insert, star, 1, "rocky")
+	mustExec(t, conn, insert, star, 2, "asteroids")
+	mustExec(t, conn, insert, star, 10, "giant")
+	if err := exec(t, conn, insert, star, 1, "giant"); sqlite.ErrCode(err) != sqlite.ResultConstraintUnique {
+		t.Errorf("duplicate orbit = %v, want a unique constraint error", err)
+	}
+	for _, args := range [][]any{{star, 0, "rocky"}, {star, 11, "rocky"}, {star, 3, "gas"}, {star, 3, "Rocky"}} {
+		if err := exec(t, conn, insert, args...); sqlite.ErrCode(err) != sqlite.ResultConstraintCheck {
+			t.Errorf("planet %v = %v, want a check constraint error", args[1:], err)
+		}
+	}
+	if err := exec(t, conn, insert, star+1, 3, "rocky"); sqlite.ErrCode(err) != sqlite.ResultConstraintForeignKey {
+		t.Errorf("planet of a missing star = %v, want a foreign key error", err)
 	}
 }

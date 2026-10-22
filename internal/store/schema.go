@@ -70,5 +70,16 @@ var schema = sqlitemigration.Schema{
 			seq     TEXT    NOT NULL CHECK (seq IN ('A', 'B', 'C', 'D', 'E')),
 			UNIQUE (game_id, x, y, z, seq)
 		) STRICT;`,
+
+		`-- A planet circles a star in an orbit from 1 to 10. The generator fills
+		-- each star's orbits from 1 without gaps. The unique key also serves
+		-- lookups by star_id.
+		CREATE TABLE planets (
+			id      INTEGER PRIMARY KEY AUTOINCREMENT,
+			star_id INTEGER NOT NULL REFERENCES stars (id),
+			orbit   INTEGER NOT NULL CHECK (orbit BETWEEN 1 AND 10),
+			kind    TEXT    NOT NULL CHECK (kind IN ('rocky', 'asteroids', 'giant')),
+			UNIQUE (star_id, orbit)
+		) STRICT;`,
 	},
 }

@@ -1,7 +1,8 @@
 # How to generate a game's cluster
 
 A game's board is its cluster: 100 star systems in a cube of coordinates from
-0 to 30 on each axis. Generate it once with `seiicho generate-cluster`.
+0 to 30 on each axis, and the planets that orbit their stars. Generate it once
+with `seiicho generate-cluster`.
 
 ## Before you begin
 
@@ -18,7 +19,7 @@ go run ./cmd/seiicho generate-cluster --env development --db tmp/seiicho.db --ga
 ```
 
 ```text
-generated a cluster of 159 stars for game 1
+generated a cluster of 159 stars and 721 planets for game 1
 ```
 
 If you leave out `--env` or `--db`, the command uses `SEIICHO_ENV` or
@@ -28,6 +29,9 @@ The cluster comes from the seed that the game was created with, so a game
 created with the same seed always gets the same cluster. One system has 5
 stars, 2 have 4, 7 have 3, 35 have 2, and the remaining 55 have 1: 159 stars
 in all. The stars in each system are lettered from `A`.
+
+Every star has at least one planet and at most 10, in orbits numbered from 1
+with no gaps: 721 planets in all. Each planet is rocky.
 
 ## If the command fails
 

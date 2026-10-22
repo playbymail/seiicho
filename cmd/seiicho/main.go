@@ -27,8 +27,8 @@
 // 0x0123456789abcdef, that the game's random sources derive from; the same
 // seed always generates the same game.
 //
-// generate-cluster generates a game's cluster of star systems from its seed.
-// It fails if the game is missing or inactive, or already has a cluster.
+// generate-cluster generates a game's cluster of star systems and their
+// planets from its seed. It fails if the game is missing or inactive, or already has a cluster.
 //
 // add-seat seats an account in a game as a player, or as a gamemaster with
 // --gamemaster. It fails if the game or the account is missing or inactive,
@@ -202,11 +202,11 @@ func generateClusterCommand() *ff.Command {
 				return err
 			}
 			defer db.Close()
-			stars, err := db.GenerateCluster(ctx, gameID)
+			stars, planets, err := db.GenerateCluster(ctx, gameID)
 			if err != nil {
 				return fmt.Errorf("game %d: %w", gameID, err)
 			}
-			fmt.Printf("generated a cluster of %d stars for game %d\n", len(stars), gameID)
+			fmt.Printf("generated a cluster of %d stars and %d planets for game %d\n", len(stars), len(planets), gameID)
 			return nil
 		}),
 	}

@@ -3,7 +3,10 @@
 
 package prng
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 // The values below pin the derivation that the package documents. If one of
 // these tests fails, existing games would no longer reproduce from their
@@ -58,5 +61,42 @@ func TestPCG(t *testing.T) {
 		if a, b := p.Uint64(), p.Uint64(); a != 0xfde90842e4654125 || b != 0x8391b764e5886694 {
 			t.Errorf("PCG = %#x, %#x; want 0xfde90842e4654125, 0x8391b764e5886694", a, b)
 		}
+	}
+}
+
+func TestRoll(t *testing.T) {
+	src := New(SplitSeed(0x0123456789abcdef)).Child(Planets)
+	var got []int
+	p := src.PRNG()
+	for _, d := range []struct{ n, lo, hi int }{{1, 1, 6}, {1, 1, 6}, {3, 1, 6}, {1, 0, 158}, {2, -5, 5}, {1, 7, 7}} {
+		got = append(got, p.Roll(d.n, d.lo, d.hi))
+	}
+	want := []int{2, 1, 9, 56, 7, 7}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("Roll = %v, want %v", got, want)
+	}
+	if a, b := src.PRNG().Roll(1, 1, 6), src.PRNG().Roll(1, 1, 6); a != b {
+		t.Errorf("PRNG did not restart: %d, %d", a, b)
+	}
+
+	// Each die is a separate draw: two 1d6 rolls match one 2d6 roll.
+	one, two := src.PRNG(), src.PRNG()
+	if a, b := one.Roll(1, 1, 6)+one.Roll(1, 1, 6), two.Roll(2, 1, 6); a != b {
+		t.Errorf("1d6 + 1d6 = %d, but 2d6 = %d", a, b)
+	}
+	for range 1000 {
+		if r := p.Roll(3, 1, 6); r < 3 || r > 18 {
+			t.Fatalf("3d6 = %d", r)
+		}
+	}
+	for _, d := range []struct{ n, lo, hi int }{{0, 1, 6}, {1, 6, 1}} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("Roll(%d, %d, %d) did not panic", d.n, d.lo, d.hi)
+				}
+			}()
+			p.Roll(d.n, d.lo, d.hi)
+		}()
 	}
 }
