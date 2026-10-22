@@ -17,7 +17,7 @@ import (
 
 func TestOpenRejectsMemoryDatabase(t *testing.T) {
 	for _, env := range []string{"development", "agent", "test", "production"} {
-		err := run(t.Context(), []string{"create-game", "--env", env, "--db", settings.MemoryDB})
+		err := run(t.Context(), []string{"create-game", "--env", env, "--db", settings.MemoryDB, "--seed", "1"})
 		if err == nil || !strings.Contains(err.Error(), "only seiichod accepts") {
 			t.Errorf("%s = %v, want rejection", env, err)
 		}
@@ -31,8 +31,21 @@ func TestCreateGame(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Close()
-	args := []string{"create-game", "--env", "test", "--db", path}
+	args := []string{"create-game", "--env", "test", "--db", path, "--seed", "0x0123456789abcdef"}
 
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{args[:5], "--seed is required"},
+		{append(args[:5:5], "--seed", "-1"), "must be an unsigned 64-bit integer"},
+		{append(args[:5:5], "--seed", "0x1_0000_0000_0000_0000"), "must be an unsigned 64-bit integer"},
+		{append(args[:5:5], "--seed", "seed"), "must be an unsigned 64-bit integer"},
+	} {
+		if err := run(t.Context(), tc.args); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%v = %v, want %q", tc.args[5:], err, tc.want)
+		}
+	}
 	if err := run(t.Context(), args); !errors.Is(err, store.ErrNoActiveAdmin) {
 		t.Fatalf("createGame without an administrator = %v, want ErrNoActiveAdmin", err)
 	}
@@ -97,7 +110,7 @@ func TestAddAndPromoteSeat(t *testing.T) {
 	if err := db.SetAccountActive(t.Context(), retired.Email, false); err != nil {
 		t.Fatal(err)
 	}
-	g, err := db.CreateGame(t.Context(), now)
+	g, err := db.CreateGame(t.Context(), 1, 2, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,6 +152,37 @@ func TestAddAndPromoteSeat(t *testing.T) {
 	}
 }
 
+func TestGenerateCluster(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "game.db")
+	db, err := store.Create(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateAccount(t.Context(), "admin@example.com", []byte("x"), true, time.Unix(1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	if err := run(t.Context(), []string{"create-game", "--env", "test", "--db", path, "--seed", "0x0123456789abcdef"}); err != nil {
+		t.Fatal(err)
+	}
+	args := func(extra ...string) []string {
+		return append([]string{"generate-cluster", "--env", "test", "--db", path}, extra...)
+	}
+
+	if err := run(t.Context(), args()); err == nil || !strings.Contains(err.Error(), "--game is required") {
+		t.Errorf("without --game = %v, want --game is required", err)
+	}
+	if err := run(t.Context(), args("--game", "999")); !errors.Is(err, store.ErrGameNotFound) {
+		t.Errorf("missing game = %v, want ErrGameNotFound", err)
+	}
+	if err := run(t.Context(), args("--game", "1")); err != nil {
+		t.Fatalf("generate-cluster = %v", err)
+	}
+	if err := run(t.Context(), args("--game", "1")); !errors.Is(err, store.ErrClusterExists) {
+		t.Errorf("generate-cluster again = %v, want ErrClusterExists", err)
+	}
+}
+
 // capture runs the command that args select and returns what it printed.
 func capture(t *testing.T, args ...string) (string, error) {
 	t.Helper()
@@ -164,7 +208,7 @@ func TestListAndShow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g, err := db.CreateGame(t.Context(), now)
+	g, err := db.CreateGame(t.Context(), 1, 2, now)
 	if err != nil {
 		t.Fatal(err)
 	}

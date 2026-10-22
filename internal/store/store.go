@@ -42,6 +42,7 @@ const (
 	ErrAccountInactive   = cerrs.Error("account is inactive")
 	ErrSeatExists        = cerrs.Error("account already has a seat in the game")
 	ErrNoActiveSeat      = cerrs.Error("account has no active seat in the game")
+	ErrClusterExists     = cerrs.Error("game already has a cluster")
 	ErrSchemaOutdated    = cerrs.Error("database schema is out of date")
 	ErrSchemaTooNew      = cerrs.Error("database schema is newer than this application")
 )

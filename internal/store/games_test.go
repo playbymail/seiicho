@@ -54,13 +54,13 @@ func TestCreateGame(t *testing.T) {
 	if err := s.SetAccountActive(t.Context(), "nobody@example.com", false); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("SetAccountActive for a missing account = %v, want ErrNotFound", err)
 	}
-	if _, err := s.CreateGame(t.Context(), now); !errors.Is(err, store.ErrNoActiveAdmin) {
+	if _, err := s.CreateGame(t.Context(), 1, 2, now); !errors.Is(err, store.ErrNoActiveAdmin) {
 		t.Fatalf("CreateGame without an active administrator = %v, want ErrNoActiveAdmin", err)
 	}
 
 	senior := create("senior@example.com", true)
 	create("junior@example.com", true)
-	g, err := s.CreateGame(t.Context(), now)
+	g, err := s.CreateGame(t.Context(), 1, 2, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,11 +156,11 @@ func TestAddAndPromoteSeat(t *testing.T) {
 	if err := s.SetAccountActive(t.Context(), retired.Email, false); err != nil {
 		t.Fatal(err)
 	}
-	g, err := s.CreateGame(t.Context(), now)
+	g, err := s.CreateGame(t.Context(), 1, 2, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	closed, err := s.CreateGame(t.Context(), now)
+	closed, err := s.CreateGame(t.Context(), 1, 2, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestAccountsAndGames(t *testing.T) {
 		}
 	}
 
-	first, err := s.CreateGame(t.Context(), now)
+	first, err := s.CreateGame(t.Context(), 1, 2, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func TestAccountsAndGames(t *testing.T) {
 	if _, err := s.AddSeat(t.Context(), first.ID, gm.ID, true, now); err != nil {
 		t.Fatal(err)
 	}
-	second, err := s.CreateGame(t.Context(), now.Add(time.Hour))
+	second, err := s.CreateGame(t.Context(), 1, 2, now.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +348,7 @@ func TestListSeats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g, err := s.CreateGame(t.Context(), now)
+	g, err := s.CreateGame(t.Context(), 1, 2, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestListSeats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	empty, err := s.CreateGame(t.Context(), now)
+	empty, err := s.CreateGame(t.Context(), 1, 2, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +415,7 @@ func TestCreateGameWithGamemaster(t *testing.T) {
 		{"missing account", 999, store.ErrAccountNotFound},
 		{"inactive account", retired.ID, store.ErrAccountInactive},
 	} {
-		if _, err := s.CreateGameWithGamemaster(t.Context(), tc.accountID, now); !errors.Is(err, tc.want) {
+		if _, err := s.CreateGameWithGamemaster(t.Context(), tc.accountID, 1, 2, now); !errors.Is(err, tc.want) {
 			t.Errorf("CreateGameWithGamemaster, %s = %v, want %v", tc.name, err, tc.want)
 		}
 	}
@@ -425,7 +425,7 @@ func TestCreateGameWithGamemaster(t *testing.T) {
 		}
 	})
 
-	g, err := s.CreateGameWithGamemaster(t.Context(), player.ID, now)
+	g, err := s.CreateGameWithGamemaster(t.Context(), player.ID, 1, 2, now)
 	if err != nil {
 		t.Fatal(err)
 	}

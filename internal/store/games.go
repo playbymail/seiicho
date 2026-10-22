@@ -20,11 +20,12 @@ type Game struct {
 	GM Account
 }
 
-// CreateGame adds a game and seats the senior active administrator, the one
-// with the lowest account ID, as its gamemaster. It returns ErrNoActiveAdmin,
-// and creates nothing, if there is no active administrator.
-func (s *Store) CreateGame(ctx context.Context, now time.Time) (Game, error) {
-	return s.createGame(ctx, now, func(conn *sqlite.Conn) (Account, error) {
+// CreateGame adds a game, seeded with seed1 and seed2, and seats the senior
+// active administrator, the one with the lowest account ID, as its
+// gamemaster. It returns ErrNoActiveAdmin, and creates nothing, if there is
+// no active administrator.
+func (s *Store) CreateGame(ctx context.Context, seed1, seed2 uint64, now time.Time) (Game, error) {
+	return s.createGame(ctx, seed1, seed2, now, func(conn *sqlite.Conn) (Account, error) {
 		a, err := queryAccount(conn,
 			`SELECT id, email, password_hash, is_admin, is_active FROM accounts
 			 WHERE is_admin = 1 AND is_active = 1 ORDER BY id LIMIT 1;`)
@@ -35,12 +36,12 @@ func (s *Store) CreateGame(ctx context.Context, now time.Time) (Game, error) {
 	})
 }
 
-// CreateGameWithGamemaster adds a game and seats the given account, which
-// need not be an administrator, as its gamemaster. It returns
-// ErrAccountNotFound or ErrAccountInactive, and creates nothing, unless the
-// account exists and is active.
-func (s *Store) CreateGameWithGamemaster(ctx context.Context, accountID int64, now time.Time) (Game, error) {
-	return s.createGame(ctx, now, func(conn *sqlite.Conn) (Account, error) {
+// CreateGameWithGamemaster adds a game, seeded with seed1 and seed2, and
+// seats the given account, which need not be an administrator, as its
+// gamemaster. It returns ErrAccountNotFound or ErrAccountInactive, and
+// creates nothing, unless the account exists and is active.
+func (s *Store) CreateGameWithGamemaster(ctx context.Context, accountID int64, seed1, seed2 uint64, now time.Time) (Game, error) {
+	return s.createGame(ctx, seed1, seed2, now, func(conn *sqlite.Conn) (Account, error) {
 		a, err := queryAccount(conn,
 			`SELECT id, email, password_hash, is_admin, is_active FROM accounts WHERE id = ?;`,
 			accountID)
@@ -58,7 +59,7 @@ func (s *Store) CreateGameWithGamemaster(ctx context.Context, accountID int64, n
 
 // createGame adds a game and seats the account that gamemaster returns as its
 // gamemaster, all in one transaction. If gamemaster fails, nothing is created.
-func (s *Store) createGame(ctx context.Context, now time.Time, gamemaster func(*sqlite.Conn) (Account, error)) (g Game, err error) {
+func (s *Store) createGame(ctx context.Context, seed1, seed2 uint64, now time.Time, gamemaster func(*sqlite.Conn) (Account, error)) (g Game, err error) {
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
 		return Game{}, err
@@ -75,8 +76,9 @@ func (s *Store) createGame(ctx context.Context, now time.Time, gamemaster func(*
 		return Game{}, err
 	}
 
-	err = sqlitex.Execute(conn, `INSERT INTO games (created_at) VALUES (?);`,
-		&sqlitex.ExecOptions{Args: []any{now.Unix()}})
+	// The columns are signed; store each seed's bits unchanged.
+	err = sqlitex.Execute(conn, `INSERT INTO games (seed1, seed2, created_at) VALUES (?, ?, ?);`,
+		&sqlitex.ExecOptions{Args: []any{int64(seed1), int64(seed2), now.Unix()}})
 	if err != nil {
 		return Game{}, err
 	}

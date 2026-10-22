@@ -32,10 +32,14 @@ var schema = sqlitemigration.Schema{
 		CREATE INDEX sessions_account_id ON sessions (account_id);
 
 		-- A game is one instance of the game. Games and seats are deactivated
-		-- rather than deleted, so neither cascades.
+		-- rather than deleted, so neither cascades. seed1 and seed2 seed the
+		-- game's random sources (see internal/prng). They are uint64 values
+		-- stored as the int64 with the same bits, so they may read as negative.
 		CREATE TABLE games (
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,
 			is_active  INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+			seed1      INTEGER NOT NULL,
+			seed2      INTEGER NOT NULL,
 			created_at INTEGER NOT NULL
 		) STRICT;
 
@@ -51,6 +55,20 @@ var schema = sqlitemigration.Schema{
 			UNIQUE (account_id, game_id)
 		) STRICT;
 
-		CREATE INDEX seats_game_id ON seats (game_id);`,
+		CREATE INDEX seats_game_id ON seats (game_id);
+
+		-- A star system is the set of a game's stars at one (x, y, z); seq
+		-- letters its stars from A. A game's cluster is the set of its stars,
+		-- so a game has a board exactly when it has stars. The unique key
+		-- also serves lookups by game_id.
+		CREATE TABLE stars (
+			id      INTEGER PRIMARY KEY AUTOINCREMENT,
+			game_id INTEGER NOT NULL REFERENCES games (id),
+			x       INTEGER NOT NULL CHECK (x BETWEEN 0 AND 30),
+			y       INTEGER NOT NULL CHECK (y BETWEEN 0 AND 30),
+			z       INTEGER NOT NULL CHECK (z BETWEEN 0 AND 30),
+			seq     TEXT    NOT NULL CHECK (seq IN ('A', 'B', 'C', 'D', 'E')),
+			UNIQUE (game_id, x, y, z, seq)
+		) STRICT;`,
 	},
 }

@@ -12,14 +12,20 @@ a gamemaster seat held by an administrator, or by an account you choose.
   `agent` environment starts with one, `admin@example.com`.
 - To choose the gamemaster yourself, you need the ID of an active account. See
   [How to find account, game, and seat IDs](find-ids.md).
+- Choose a seed: any unsigned 64-bit integer, such as `0x0123456789abcdef`.
+  Everything random in the game, starting with its cluster of star systems,
+  derives from the seed, so the same seed always generates the same game.
+  Write the seed down if you may want to reproduce the game.
 
 ## Create the game
 
-Run `create-game` with the environment and the database file:
+Run `create-game` with the environment, the database file, and the seed:
 
 ```sh
-go run ./cmd/seiicho create-game --env development --db tmp/seiicho.db
+go run ./cmd/seiicho create-game --env development --db tmp/seiicho.db --seed 0x0123456789abcdef
 ```
+
+The seed may be hexadecimal with a `0x` prefix, or decimal.
 
 If you leave out `--env` or `--db`, the command uses `SEIICHO_ENV` or
 `SEIICHO_DB` instead.
@@ -45,7 +51,7 @@ Give `--with-gamemaster` the account's ID to seat that account as the
 gamemaster instead:
 
 ```sh
-go run ./cmd/seiicho create-game --env development --db tmp/seiicho.db --with-gamemaster 2
+go run ./cmd/seiicho create-game --env development --db tmp/seiicho.db --seed 0xfedcba9876543210 --with-gamemaster 2
 ```
 
 ```text
@@ -55,6 +61,9 @@ created game 2 with gamemaster acct01@example.com (seat 2)
 The account must exist and be active, but it need not be an administrator, and
 the database need not have an administrator at all. No administrator is seated.
 To add more gamemasters, see [How to seat an account in a game](seat-an-account.md).
+
+The new game has no board yet. To generate one, see
+[How to generate a game's cluster](generate-a-cluster.md).
 
 ## If the command fails
 
@@ -79,6 +88,10 @@ No command can make an account an administrator yet.
 From `--with-gamemaster`: check the account ID with `seiicho list-accounts`. To
 reactivate an account, see
 [How to deactivate or reactivate an account](deactivate-an-account.md).
+
+### `--seed is required` or `--seed "…" must be an unsigned 64-bit integer`
+
+Give a seed from 0 to `0xffffffffffffffff`, such as `--seed 0x0123456789abcdef`.
 
 ### `--with-gamemaster must be a positive account ID`
 

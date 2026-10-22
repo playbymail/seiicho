@@ -68,8 +68,8 @@ func TestSeats(t *testing.T) {
 	}
 	defer s.Put(conn)
 
-	g1 := mustExec(t, conn, `INSERT INTO games (created_at) VALUES (?);`, now.Unix())
-	g2 := mustExec(t, conn, `INSERT INTO games (created_at) VALUES (?);`, now.Unix())
+	g1 := mustExec(t, conn, `INSERT INTO games (seed1, seed2, created_at) VALUES (1, 2, ?);`, now.Unix())
+	g2 := mustExec(t, conn, `INSERT INTO games (seed1, seed2, created_at) VALUES (1, 2, ?);`, now.Unix())
 	seat := mustExec(t, conn, `INSERT INTO seats (game_id, account_id, created_at) VALUES (?, ?, ?);`, g1, a.ID, now.Unix())
 
 	var active, gm bool
@@ -119,11 +119,11 @@ func TestGameAndSeatIDsAreNotReused(t *testing.T) {
 	}
 	defer s.Put(conn)
 
-	game := mustExec(t, conn, `INSERT INTO games (created_at) VALUES (1);`)
+	game := mustExec(t, conn, `INSERT INTO games (seed1, seed2, created_at) VALUES (1, 2, 1);`)
 	seat := mustExec(t, conn, `INSERT INTO seats (game_id, account_id, created_at) VALUES (?, ?, 1);`, game, a.ID)
 	mustExec(t, conn, `DELETE FROM seats;`)
 	mustExec(t, conn, `DELETE FROM games;`)
-	if again := mustExec(t, conn, `INSERT INTO games (created_at) VALUES (1);`); again == game {
+	if again := mustExec(t, conn, `INSERT INTO games (seed1, seed2, created_at) VALUES (1, 2, 1);`); again == game {
 		t.Errorf("game ID %d was reused", game)
 	}
 	if again := mustExec(t, conn, `INSERT INTO seats (game_id, account_id, created_at) VALUES (last_insert_rowid(), ?, 1);`, a.ID); again == seat {

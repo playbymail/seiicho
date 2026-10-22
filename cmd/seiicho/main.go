@@ -5,7 +5,8 @@
 //
 // Usage:
 //
-//	seiicho create-game [--env ENV] [--db PATH] [--with-gamemaster ID]
+//	seiicho create-game [--env ENV] [--db PATH] --seed SEED [--with-gamemaster ID]
+//	seiicho generate-cluster [--env ENV] [--db PATH] --game ID
 //	seiicho add-seat [--env ENV] [--db PATH] --game ID --account ID [--gamemaster]
 //	seiicho promote-seat [--env ENV] [--db PATH] --game ID --account ID
 //	seiicho list-accounts [--env ENV] [--db PATH] [--json]
@@ -22,7 +23,12 @@
 // one with the lowest account ID, as its gamemaster. It fails if there is no
 // active administrator. With --with-gamemaster, it seats that account as the
 // gamemaster instead; the account must exist and be active, but need not be
-// an administrator.
+// an administrator. --seed is an unsigned 64-bit integer, such as
+// 0x0123456789abcdef, that the game's random sources derive from; the same
+// seed always generates the same game.
+//
+// generate-cluster generates a game's cluster of star systems from its seed.
+// It fails if the game is missing or inactive, or already has a cluster.
 //
 // add-seat seats an account in a game as a player, or as a gamemaster with
 // --gamemaster. It fails if the game or the account is missing or inactive,
@@ -60,12 +66,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/peterbourgon/ff/v4"
 	"github.com/playbymail/seiicho"
+	"github.com/playbymail/seiicho/internal/prng"
 	"github.com/playbymail/seiicho/internal/settings"
 	"github.com/playbymail/seiicho/internal/store"
 )
@@ -88,6 +96,7 @@ func run(ctx context.Context, args []string) error {
 		ShortHelp: "command-line interface to the game engine",
 		Subcommands: []*ff.Command{
 			createGameCommand(),
+			generateClusterCommand(),
 			addSeatCommand(),
 			promoteSeatCommand(),
 			listAccountsCommand(),
@@ -124,16 +133,29 @@ func open(ctx context.Context, s *settings.Settings) (*store.Store, error) {
 
 func createGameCommand() *ff.Command {
 	s := settings.New("create-game")
+	seed := s.Flags.StringConfig(ff.FlagConfig{
+		LongName: "seed", Placeholder: "SEED", NoDefault: true,
+		Usage: "unsigned 64-bit seed for the game, such as 0x0123456789abcdef (required)",
+	}, "")
 	gm := s.Flags.Int64Config(ff.FlagConfig{
 		LongName: "with-gamemaster", Placeholder: "ID", NoDefault: true,
 		Usage: "ID of the account to seat as gamemaster instead of an administrator",
 	}, 0)
 	return &ff.Command{
 		Name:      "create-game",
-		Usage:     "seiicho create-game [--env ENV] [--db PATH] [--with-gamemaster ID]",
+		Usage:     "seiicho create-game [--env ENV] [--db PATH] --seed SEED [--with-gamemaster ID]",
 		ShortHelp: "create a game with a gamemaster",
 		Flags:     s.Flags,
 		Exec: settings.NoArgs(func(ctx context.Context) error {
+			if *seed == "" {
+				return errors.New("--seed is required")
+			}
+			// Base 0 accepts 0x, 0o, and 0b prefixes as well as decimal.
+			u, err := strconv.ParseUint(*seed, 0, 64)
+			if err != nil {
+				return fmt.Errorf("--seed %q must be an unsigned 64-bit integer, such as 0x0123456789abcdef", *seed)
+			}
+			seed1, seed2 := prng.SplitSeed(u)
 			withGM := false
 			if f, ok := s.Flags.GetFlag("with-gamemaster"); ok && f.IsSet() {
 				if *gm <= 0 {
@@ -148,13 +170,43 @@ func createGameCommand() *ff.Command {
 			defer db.Close()
 			var g store.Game
 			if withGM {
-				if g, err = db.CreateGameWithGamemaster(ctx, *gm, time.Now()); err != nil {
+				if g, err = db.CreateGameWithGamemaster(ctx, *gm, seed1, seed2, time.Now()); err != nil {
 					return fmt.Errorf("account %d: %w", *gm, err)
 				}
-			} else if g, err = db.CreateGame(ctx, time.Now()); err != nil {
+			} else if g, err = db.CreateGame(ctx, seed1, seed2, time.Now()); err != nil {
 				return err
 			}
 			fmt.Printf("created game %d with gamemaster %s (seat %d)\n", g.ID, g.GM.Email, g.SeatID)
+			return nil
+		}),
+	}
+}
+
+func generateClusterCommand() *ff.Command {
+	s := settings.New("generate-cluster")
+	game := s.Flags.Int64Config(ff.FlagConfig{
+		LongName: "game", Placeholder: "ID", NoDefault: true, Usage: "ID of the game (required)",
+	}, 0)
+	return &ff.Command{
+		Name:      "generate-cluster",
+		Usage:     "seiicho generate-cluster [--env ENV] [--db PATH] --game ID",
+		ShortHelp: "generate a game's cluster of star systems",
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			gameID := *game
+			if gameID <= 0 {
+				return errors.New("--game is required and must be a positive game ID")
+			}
+			db, err := open(ctx, s)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			stars, err := db.GenerateCluster(ctx, gameID)
+			if err != nil {
+				return fmt.Errorf("game %d: %w", gameID, err)
+			}
+			fmt.Printf("generated a cluster of %d stars for game %d\n", len(stars), gameID)
 			return nil
 		}),
 	}
