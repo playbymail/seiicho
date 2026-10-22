@@ -124,7 +124,7 @@ func capture(t *testing.T, args ...string) (string, error) {
 	return b.String(), err
 }
 
-func TestListAccountsAndGames(t *testing.T) {
+func TestListAndShow(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "game.db")
 	db, err := store.Create(t.Context(), path)
 	if err != nil {
@@ -134,13 +134,18 @@ func TestListAccountsAndGames(t *testing.T) {
 	if _, err := db.CreateAccount(t.Context(), "admin@example.com", []byte("x"), true, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.CreateAccount(t.Context(), "player@example.com", []byte("x"), false, now); err != nil {
+	player, err := db.CreateAccount(t.Context(), "player@example.com", []byte("x"), false, now)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SetAccountActive(t.Context(), "player@example.com", false); err != nil {
+	g, err := db.CreateGame(t.Context(), now)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.CreateGame(t.Context(), now); err != nil {
+	if _, err := db.AddSeat(t.Context(), g.ID, player.ID, false, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetAccountActive(t.Context(), player.Email, false); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
@@ -154,12 +159,73 @@ func TestListAccountsAndGames(t *testing.T) {
 			"ID  EMAIL               ADMIN  ACTIVE\n" +
 			"1   admin@example.com   yes    yes\n" +
 			"2   player@example.com  no     no\n"},
-		{[]string{"list-accounts", "--email", " Player@Example.com "}, "" +
-			"ID  EMAIL               ADMIN  ACTIVE\n" +
-			"2   player@example.com  no     no\n"},
+		{[]string{"list-accounts", "--json"}, `[
+  {
+    "id": 1,
+    "email": "admin@example.com",
+    "is_admin": true,
+    "is_active": true
+  },
+  {
+    "id": 2,
+    "email": "player@example.com",
+    "is_admin": false,
+    "is_active": false
+  }
+]
+`},
+		{[]string{"show-account", "--email", " Player@Example.com "}, "" +
+			"ID      2\n" +
+			"EMAIL   player@example.com\n" +
+			"ADMIN   no\n" +
+			"ACTIVE  no\n"},
+		{[]string{"show-account", "--email", "player@example.com", "--json"}, `{
+  "id": 2,
+  "email": "player@example.com",
+  "is_admin": false,
+  "is_active": false
+}
+`},
 		{[]string{"list-games"}, "" +
 			"ID  ACTIVE  CREATED              SEATS  GAMEMASTERS\n" +
-			"1   yes     2026-10-22 15:04:05  1      admin@example.com\n"},
+			"1   yes     2026-10-22 15:04:05  2      admin@example.com\n"},
+		{[]string{"list-games", "--json"}, `[
+  {
+    "id": 1,
+    "is_active": true,
+    "created_at": "2026-10-22T15:04:05Z",
+    "seats": 2,
+    "gamemasters": [
+      "admin@example.com"
+    ]
+  }
+]
+`},
+		{[]string{"list-seats", "--game", "1"}, "" +
+			"SEAT  ACCOUNT  EMAIL               ROLE        ACTIVE  CREATED\n" +
+			"1     1        admin@example.com   gamemaster  yes     2026-10-22 15:04:05\n" +
+			"2     2        player@example.com  player      yes     2026-10-22 16:04:05\n"},
+		{[]string{"list-seats", "--game", "1", "--json"}, `[
+  {
+    "id": 1,
+    "game_id": 1,
+    "account_id": 1,
+    "email": "admin@example.com",
+    "is_gm": true,
+    "is_active": true,
+    "created_at": "2026-10-22T15:04:05Z"
+  },
+  {
+    "id": 2,
+    "game_id": 1,
+    "account_id": 2,
+    "email": "player@example.com",
+    "is_gm": false,
+    "is_active": true,
+    "created_at": "2026-10-22T16:04:05Z"
+  }
+]
+`},
 	} {
 		got, err := capture(t, append(tc.args, flags...)...)
 		if err != nil {
@@ -169,7 +235,36 @@ func TestListAccountsAndGames(t *testing.T) {
 		}
 	}
 
-	if _, err := capture(t, append([]string{"list-accounts", "--email", "nobody@example.com"}, flags...)...); !errors.Is(err, store.ErrAccountNotFound) {
-		t.Errorf("list-accounts for a missing email = %v, want ErrAccountNotFound", err)
+	for _, tc := range []struct {
+		args    []string
+		wantErr error
+		wantMsg string
+	}{
+		{[]string{"show-account", "--email", "nobody@example.com"}, store.ErrAccountNotFound, ""},
+		{[]string{"show-account"}, nil, "--email is required"},
+		{[]string{"list-seats", "--game", "999"}, store.ErrGameNotFound, ""},
+		{[]string{"list-seats"}, nil, "--game is required"},
+		{[]string{"list-accounts", "--email", "admin@example.com"}, nil, "email"},
+	} {
+		_, err := capture(t, append(tc.args, flags...)...)
+		if tc.wantErr != nil && !errors.Is(err, tc.wantErr) || err == nil || !strings.Contains(err.Error(), tc.wantMsg) {
+			t.Errorf("%v = %v, want %v %q", tc.args, err, tc.wantErr, tc.wantMsg)
+		}
+	}
+}
+
+func TestListEmptyJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "game.db")
+	db, err := store.Create(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	// An empty listing is an empty array, not null, so jq filters still work.
+	for _, cmd := range []string{"list-accounts", "list-games"} {
+		got, err := capture(t, cmd, "--env", "test", "--db", path, "--json")
+		if err != nil || got != "[]\n" {
+			t.Errorf("%s --json = %q, %v; want []", cmd, got, err)
+		}
 	}
 }

@@ -11,7 +11,7 @@ seat a gamemaster seat with `seiicho promote-seat`.
   not its email.
 
 To look up either ID, see
-[How to find account and game IDs](find-account-and-game-ids.md).
+[How to find account, game, and seat IDs](find-ids.md).
 
 If you leave out `--env` or `--db`, the commands use `SEIICHO_ENV` or
 `SEIICHO_DB` instead.
@@ -73,13 +73,14 @@ Check the account ID with `seiicho list-accounts`. To reactivate an account, see
 
 ### `account already has a seat in the game`
 
-From `add-seat`: the account already has a seat in the game, active or not. To
-make an active seat a gamemaster seat, use `promote-seat`.
+From `add-seat`: the account already has a seat in the game, active or not.
+`seiicho list-seats --game ID` shows it. To make an active seat a gamemaster
+seat, use `promote-seat`.
 
 ### `account has no active seat in the game`
 
 From `promote-seat`: the account has no seat in the game, or its seat is
-inactive. Use `add-seat --gamemaster` to seat an account that has no seat.
+inactive; `seiicho list-seats --game ID` shows which. Use `add-seat --gamemaster` to seat an account that has no seat.
 
 ### `--game is required` or `--account is required`
 

@@ -8,8 +8,10 @@
 //	seiicho create-game [--env ENV] [--db PATH]
 //	seiicho add-seat [--env ENV] [--db PATH] --game ID --account ID [--gamemaster]
 //	seiicho promote-seat [--env ENV] [--db PATH] --game ID --account ID
-//	seiicho list-accounts [--env ENV] [--db PATH] [--email EMAIL]
-//	seiicho list-games [--env ENV] [--db PATH]
+//	seiicho list-accounts [--env ENV] [--db PATH] [--json]
+//	seiicho show-account [--env ENV] [--db PATH] --email EMAIL [--json]
+//	seiicho list-games [--env ENV] [--db PATH] [--json]
+//	seiicho list-seats [--env ENV] [--db PATH] --game ID [--json]
 //	seiicho version
 //
 // --env and --db resolve as described in internal/settings. Every command
@@ -29,16 +31,29 @@
 // active seat in the game. Promoting a gamemaster changes nothing.
 //
 // list-accounts prints every account's ID, email, and whether it is an
-// administrator and active. With --email it prints only the account with that
-// email, ignoring case, and fails if there is none.
+// administrator and active.
+//
+// show-account prints the same fields for the account with the given email,
+// ignoring case. It fails if there is no such account.
 //
 // list-games prints every game's ID, whether it is active, when it was created
 // (in UTC), its number of active seats, and the emails of its active
 // gamemasters.
+//
+// list-seats prints every seat in a game, active or not: the seat ID, the
+// account's ID and email, whether it is a gamemaster or player seat, whether
+// it is active, and when it was created (in UTC). It fails if there is no such
+// game.
+//
+// Commands named list print a table, and commands named show print a single
+// record. With --json, a list command prints a JSON array instead, and a show
+// command prints a JSON object; times are RFC 3339 in UTC. The JSON never
+// includes password hashes.
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -74,7 +89,9 @@ func run(ctx context.Context, args []string) error {
 			addSeatCommand(),
 			promoteSeatCommand(),
 			listAccountsCommand(),
+			showAccountCommand(),
 			listGamesCommand(),
+			listSeatsCommand(),
 			{
 				Name:      "version",
 				Usage:     "seiicho version",
@@ -213,54 +230,128 @@ func promoteSeatCommand() *ff.Command {
 	}
 }
 
+// outputSettings are the settings of a command that prints a table, or JSON
+// with --json.
+type outputSettings struct {
+	*settings.Settings
+	json bool
+}
+
+func newOutputSettings(name string) *outputSettings {
+	s := &outputSettings{Settings: settings.New(name)}
+	s.Flags.BoolVar(&s.json, 0, "json", "print JSON instead of a table")
+	return s
+}
+
+// print writes v as JSON with --json, and rows as a table otherwise.
+func (s *outputSettings) print(v any, rows [][]string) error {
+	if s.json {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(v)
+	}
+	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	for _, row := range rows {
+		fmt.Fprintln(w, strings.Join(row, "\t"))
+	}
+	return w.Flush()
+}
+
+// accountJSON is an account as list-accounts and show-account print it.
+type accountJSON struct {
+	ID       int64  `json:"id"`
+	Email    string `json:"email"`
+	IsAdmin  bool   `json:"is_admin"`
+	IsActive bool   `json:"is_active"`
+}
+
+func newAccountJSON(a store.Account) accountJSON {
+	return accountJSON{ID: a.ID, Email: a.Email, IsAdmin: a.IsAdmin, IsActive: a.IsActive}
+}
+
 func listAccountsCommand() *ff.Command {
-	s := settings.New("list-accounts")
-	email := s.Flags.StringConfig(ff.FlagConfig{
-		LongName: "email", Placeholder: "EMAIL", NoDefault: true,
-		Usage: "list only the account with this email address",
-	}, "")
+	s := newOutputSettings("list-accounts")
 	return &ff.Command{
 		Name:      "list-accounts",
-		Usage:     "seiicho list-accounts [--env ENV] [--db PATH] [--email EMAIL]",
+		Usage:     "seiicho list-accounts [--env ENV] [--db PATH] [--json]",
 		ShortHelp: "list accounts and their IDs",
 		Flags:     s.Flags,
 		Exec: settings.NoArgs(func(ctx context.Context) error {
-			db, err := open(ctx, s)
+			db, err := open(ctx, s.Settings)
 			if err != nil {
 				return err
 			}
 			defer db.Close()
-			var accounts []store.Account
-			if e := strings.ToLower(strings.TrimSpace(*email)); e != "" {
-				a, err := db.AccountByEmail(ctx, e)
-				if errors.Is(err, store.ErrNotFound) {
-					return fmt.Errorf("%s: %w", e, store.ErrAccountNotFound)
-				} else if err != nil {
-					return err
-				}
-				accounts = append(accounts, a)
-			} else if accounts, err = db.Accounts(ctx); err != nil {
+			accounts, err := db.Accounts(ctx)
+			if err != nil {
 				return err
 			}
-			w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tEMAIL\tADMIN\tACTIVE")
+			out := make([]accountJSON, 0, len(accounts))
+			rows := [][]string{{"ID", "EMAIL", "ADMIN", "ACTIVE"}}
 			for _, a := range accounts {
-				fmt.Fprintf(w, "%d\t%s\t%s\t%s\n", a.ID, a.Email, yesNo(a.IsAdmin), yesNo(a.IsActive))
+				out = append(out, newAccountJSON(a))
+				rows = append(rows, []string{fmt.Sprint(a.ID), a.Email, yesNo(a.IsAdmin), yesNo(a.IsActive)})
 			}
-			return w.Flush()
+			return s.print(out, rows)
 		}),
 	}
 }
 
+func showAccountCommand() *ff.Command {
+	s := newOutputSettings("show-account")
+	email := s.Flags.StringConfig(ff.FlagConfig{
+		LongName: "email", Placeholder: "EMAIL", NoDefault: true,
+		Usage: "email address of the account (required)",
+	}, "")
+	return &ff.Command{
+		Name:      "show-account",
+		Usage:     "seiicho show-account [--env ENV] [--db PATH] --email EMAIL [--json]",
+		ShortHelp: "show the account with an email address",
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			e := strings.ToLower(strings.TrimSpace(*email))
+			if e == "" {
+				return errors.New("--email is required")
+			}
+			db, err := open(ctx, s.Settings)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			a, err := db.AccountByEmail(ctx, e)
+			if errors.Is(err, store.ErrNotFound) {
+				return fmt.Errorf("%s: %w", e, store.ErrAccountNotFound)
+			} else if err != nil {
+				return err
+			}
+			return s.print(newAccountJSON(a), [][]string{
+				{"ID", fmt.Sprint(a.ID)},
+				{"EMAIL", a.Email},
+				{"ADMIN", yesNo(a.IsAdmin)},
+				{"ACTIVE", yesNo(a.IsActive)},
+			})
+		}),
+	}
+}
+
+// gameJSON is a game as list-games prints it.
+type gameJSON struct {
+	ID          int64     `json:"id"`
+	IsActive    bool      `json:"is_active"`
+	CreatedAt   time.Time `json:"created_at"`
+	Seats       int       `json:"seats"`
+	Gamemasters []string  `json:"gamemasters"`
+}
+
 func listGamesCommand() *ff.Command {
-	s := settings.New("list-games")
+	s := newOutputSettings("list-games")
 	return &ff.Command{
 		Name:      "list-games",
-		Usage:     "seiicho list-games [--env ENV] [--db PATH]",
+		Usage:     "seiicho list-games [--env ENV] [--db PATH] [--json]",
 		ShortHelp: "list games and their IDs",
 		Flags:     s.Flags,
 		Exec: settings.NoArgs(func(ctx context.Context) error {
-			db, err := open(ctx, s)
+			db, err := open(ctx, s.Settings)
 			if err != nil {
 				return err
 			}
@@ -269,17 +360,70 @@ func listGamesCommand() *ff.Command {
 			if err != nil {
 				return err
 			}
-			w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tACTIVE\tCREATED\tSEATS\tGAMEMASTERS")
+			out := make([]gameJSON, 0, len(games))
+			rows := [][]string{{"ID", "ACTIVE", "CREATED", "SEATS", "GAMEMASTERS"}}
 			for _, g := range games {
-				gms := strings.Join(g.Gamemasters, ",")
-				if gms == "" {
-					gms = "-"
+				gms := append([]string{}, g.Gamemasters...)
+				out = append(out, gameJSON{ID: g.ID, IsActive: g.IsActive, CreatedAt: g.CreatedAt.UTC(), Seats: g.Seats, Gamemasters: gms})
+				list := strings.Join(gms, ",")
+				if list == "" {
+					list = "-"
 				}
-				fmt.Fprintf(w, "%d\t%s\t%s\t%d\t%s\n",
-					g.ID, yesNo(g.IsActive), g.CreatedAt.UTC().Format(time.DateTime), g.Seats, gms)
+				rows = append(rows, []string{fmt.Sprint(g.ID), yesNo(g.IsActive), g.CreatedAt.UTC().Format(time.DateTime), fmt.Sprint(g.Seats), list})
 			}
-			return w.Flush()
+			return s.print(out, rows)
+		}),
+	}
+}
+
+// seatJSON is a seat as list-seats prints it.
+type seatJSON struct {
+	ID        int64     `json:"id"`
+	GameID    int64     `json:"game_id"`
+	AccountID int64     `json:"account_id"`
+	Email     string    `json:"email"`
+	IsGM      bool      `json:"is_gm"`
+	IsActive  bool      `json:"is_active"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func listSeatsCommand() *ff.Command {
+	s := newOutputSettings("list-seats")
+	game := s.Flags.Int64Config(ff.FlagConfig{
+		LongName: "game", Placeholder: "ID", NoDefault: true, Usage: "ID of the game (required)",
+	}, 0)
+	return &ff.Command{
+		Name:      "list-seats",
+		Usage:     "seiicho list-seats [--env ENV] [--db PATH] --game ID [--json]",
+		ShortHelp: "list the seats in a game",
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			gameID := *game
+			if gameID <= 0 {
+				return errors.New("--game is required and must be a positive game ID")
+			}
+			db, err := open(ctx, s.Settings)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			seats, err := db.Seats(ctx, gameID)
+			if err != nil {
+				return fmt.Errorf("game %d: %w", gameID, err)
+			}
+			out := make([]seatJSON, 0, len(seats))
+			rows := [][]string{{"SEAT", "ACCOUNT", "EMAIL", "ROLE", "ACTIVE", "CREATED"}}
+			for _, st := range seats {
+				out = append(out, seatJSON{ID: st.ID, GameID: st.GameID, AccountID: st.AccountID, Email: st.Email,
+					IsGM: st.IsGM, IsActive: st.IsActive, CreatedAt: st.CreatedAt.UTC()})
+				role := "player"
+				if st.IsGM {
+					role = "gamemaster"
+				}
+				rows = append(rows, []string{fmt.Sprint(st.ID), fmt.Sprint(st.AccountID), st.Email, role,
+					yesNo(st.IsActive), st.CreatedAt.UTC().Format(time.DateTime)})
+			}
+			return s.print(out, rows)
 		}),
 	}
 }

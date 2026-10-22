@@ -329,3 +329,60 @@ func TestAccountsAndGames(t *testing.T) {
 		t.Errorf("Games[1] = %+v, want inactive game %d with no seats", g, second.ID)
 	}
 }
+
+func TestListSeats(t *testing.T) {
+	s, err := store.OpenPrivateMemory(t.Context(), memoryName(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.Seats(t.Context(), 1); !errors.Is(err, store.ErrGameNotFound) {
+		t.Errorf("Seats of a missing game = %v, want ErrGameNotFound", err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	admin, err := s.CreateAccount(t.Context(), "admin@example.com", []byte("x"), true, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	player, err := s.CreateAccount(t.Context(), "player@example.com", []byte("x"), false, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := s.CreateGame(t.Context(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	playerSeat, err := s.AddSeat(t.Context(), g.ID, player.ID, false, now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, err := s.CreateGame(t.Context(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Inactive seats and games are still listed.
+	withConn(t, s, func(conn *sqlite.Conn) {
+		mustExec(t, conn, `UPDATE seats SET is_active = 0 WHERE id IN (?, ?);`, playerSeat, empty.SeatID)
+		mustExec(t, conn, `UPDATE games SET is_active = 0 WHERE id = ?;`, g.ID)
+	})
+
+	seats, err := s.Seats(t.Context(), g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []store.Seat{
+		{ID: g.SeatID, GameID: g.ID, AccountID: admin.ID, Email: admin.Email, IsGM: true, IsActive: true, CreatedAt: now},
+		{ID: playerSeat, GameID: g.ID, AccountID: player.ID, Email: player.Email, CreatedAt: now.Add(time.Hour)},
+	}
+	if len(seats) != len(want) {
+		t.Fatalf("Seats = %d seats, want %d", len(seats), len(want))
+	}
+	for i := range seats {
+		if seats[i] != want[i] {
+			t.Errorf("Seats[%d] = %+v, want %+v", i, seats[i], want[i])
+		}
+	}
+	if seats, err := s.Seats(t.Context(), empty.ID); err != nil || len(seats) != 1 || seats[0].IsActive {
+		t.Errorf("Seats of a game whose only seat is inactive = %+v, %v; want that inactive seat", seats, err)
+	}
+}

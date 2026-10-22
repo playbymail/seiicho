@@ -201,6 +201,69 @@ func (s *Store) Games(ctx context.Context) (games []GameSummary, err error) {
 	return games, nil
 }
 
+// Seat is an account's seat in a game.
+type Seat struct {
+	ID        int64
+	GameID    int64
+	AccountID int64
+	// Email is the email of the account holding the seat.
+	Email     string
+	IsGM      bool
+	IsActive  bool
+	CreatedAt time.Time
+}
+
+// Seats returns every seat in a game, active or not, ordered by seat ID. The
+// game may be inactive; it returns ErrGameNotFound if there is no such game.
+func (s *Store) Seats(ctx context.Context, gameID int64) (seats []Seat, err error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.pool.Put(conn)
+
+	// Read both queries from one snapshot.
+	defer sqlitex.Save(conn)(&err)
+
+	found := false
+	err = sqlitex.Execute(conn, `SELECT 1 FROM games WHERE id = ?;`, &sqlitex.ExecOptions{
+		Args: []any{gameID},
+		ResultFunc: func(*sqlite.Stmt) error {
+			found = true
+			return nil
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, ErrGameNotFound
+	}
+	err = sqlitex.Execute(conn,
+		`SELECT s.id, s.game_id, s.account_id, a.email, s.is_gm, s.is_active, s.created_at
+		 FROM seats s JOIN accounts a ON a.id = s.account_id
+		 WHERE s.game_id = ? ORDER BY s.id;`,
+		&sqlitex.ExecOptions{
+			Args: []any{gameID},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				seats = append(seats, Seat{
+					ID:        stmt.ColumnInt64(0),
+					GameID:    stmt.ColumnInt64(1),
+					AccountID: stmt.ColumnInt64(2),
+					Email:     stmt.ColumnText(3),
+					IsGM:      stmt.ColumnBool(4),
+					IsActive:  stmt.ColumnBool(5),
+					CreatedAt: time.Unix(stmt.ColumnInt64(6), 0),
+				})
+				return nil
+			},
+		})
+	if err != nil {
+		return nil, err
+	}
+	return seats, nil
+}
+
 // checkGameAndAccount returns ErrGameNotFound, ErrGameInactive,
 // ErrAccountNotFound, or ErrAccountInactive unless both the game and the
 // account exist and are active.
