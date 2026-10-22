@@ -108,7 +108,9 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var valid bool
 	switch {
 	case err == nil:
-		valid = auth.CheckPassword(account.PasswordHash, password)
+		// Check the password even for an inactive account, so that the
+		// response does not reveal whether the account is active.
+		valid = auth.CheckPassword(account.PasswordHash, password) && account.IsActive
 	case errors.Is(err, store.ErrNotFound):
 		valid = auth.CheckNoPassword(password)
 	default:
@@ -212,6 +214,10 @@ func (s *server) handleLogMeIn(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if err != nil {
 		s.serverError(w, "log me in", err)
+		return
+	}
+	if !account.IsActive {
+		http.Error(w, "account is inactive", http.StatusForbidden)
 		return
 	}
 	if err := s.startSession(w, r, account); err != nil {

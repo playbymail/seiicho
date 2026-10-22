@@ -17,6 +17,7 @@ type Account struct {
 	Email        string
 	PasswordHash []byte
 	IsAdmin      bool
+	IsActive     bool
 }
 
 // CreateAccount adds an account. It returns ErrAccountExists, and changes
@@ -36,7 +37,7 @@ func (s *Store) CreateAccount(ctx context.Context, email string, passwordHash []
 	} else if err != nil {
 		return Account{}, err
 	}
-	return Account{ID: conn.LastInsertRowID(), Email: email, PasswordHash: passwordHash, IsAdmin: isAdmin}, nil
+	return Account{ID: conn.LastInsertRowID(), Email: email, PasswordHash: passwordHash, IsAdmin: isAdmin, IsActive: true}, nil
 }
 
 // AccountByEmail returns the account with the given email, ignoring case.
@@ -48,8 +49,28 @@ func (s *Store) AccountByEmail(ctx context.Context, email string) (Account, erro
 	defer s.pool.Put(conn)
 
 	return queryAccount(conn,
-		`SELECT id, email, password_hash, is_admin FROM accounts WHERE email = ?;`,
+		`SELECT id, email, password_hash, is_admin, is_active FROM accounts WHERE email = ?;`,
 		email)
+}
+
+// SetAccountActive activates or deactivates the account with the given email,
+// ignoring case. It returns ErrNotFound if there is no such account.
+func (s *Store) SetAccountActive(ctx context.Context, email string, active bool) error {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return err
+	}
+	defer s.pool.Put(conn)
+
+	err = sqlitex.Execute(conn, `UPDATE accounts SET is_active = ? WHERE email = ?;`,
+		&sqlitex.ExecOptions{Args: []any{active, email}})
+	if err != nil {
+		return err
+	}
+	if conn.Changes() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // SetPassword replaces the password hash of the account with the given email,
@@ -95,7 +116,7 @@ func (s *Store) CreateSession(ctx context.Context, tokenHash []byte, accountID i
 		&sqlitex.ExecOptions{Args: []any{tokenHash, accountID, now.Unix(), expires.Unix()}})
 }
 
-// SessionAccount returns the account for an unexpired session.
+// SessionAccount returns the active account for an unexpired session.
 func (s *Store) SessionAccount(ctx context.Context, tokenHash []byte, now time.Time) (Account, error) {
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
@@ -104,9 +125,9 @@ func (s *Store) SessionAccount(ctx context.Context, tokenHash []byte, now time.T
 	defer s.pool.Put(conn)
 
 	return queryAccount(conn,
-		`SELECT a.id, a.email, a.password_hash, a.is_admin
+		`SELECT a.id, a.email, a.password_hash, a.is_admin, a.is_active
 		 FROM sessions s JOIN accounts a ON a.id = s.account_id
-		 WHERE s.token_hash = ? AND s.expires_at > ?;`,
+		 WHERE s.token_hash = ? AND s.expires_at > ? AND a.is_active = 1;`,
 		tokenHash, now.Unix())
 }
 
@@ -134,6 +155,7 @@ func queryAccount(conn *sqlite.Conn, query string, args ...any) (Account, error)
 			a.PasswordHash = make([]byte, stmt.ColumnLen(2))
 			stmt.ColumnBytes(2, a.PasswordHash)
 			a.IsAdmin = stmt.ColumnBool(3)
+			a.IsActive = stmt.ColumnBool(4)
 			return nil
 		},
 	})

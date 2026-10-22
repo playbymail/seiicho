@@ -47,12 +47,12 @@ func TestCreateGame(t *testing.T) {
 	// Neither a player nor an inactive administrator can be the gamemaster.
 	create("player@example.com", false)
 	retired := create("retired@example.com", true)
-	conn, err := s.Conn(t.Context())
-	if err != nil {
+	if err := s.SetAccountActive(t.Context(), retired.Email, false); err != nil {
 		t.Fatal(err)
 	}
-	mustExec(t, conn, `UPDATE accounts SET is_active = 0 WHERE id = ?;`, retired.ID)
-	s.Put(conn) // a private memory store has only one connection
+	if err := s.SetAccountActive(t.Context(), "nobody@example.com", false); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("SetAccountActive for a missing account = %v, want ErrNotFound", err)
+	}
 	if _, err := s.CreateGame(t.Context(), now); !errors.Is(err, store.ErrNoActiveAdmin) {
 		t.Fatalf("CreateGame without an active administrator = %v, want ErrNoActiveAdmin", err)
 	}
@@ -67,7 +67,7 @@ func TestCreateGame(t *testing.T) {
 		t.Errorf("gamemaster = %s, want %s", g.GM.Email, senior.Email)
 	}
 
-	conn, err = s.Conn(t.Context())
+	conn, err := s.Conn(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

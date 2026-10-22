@@ -58,15 +58,9 @@ The new password is read from standard input: a terminal gets a prompt that
 does not echo, and piped input supplies the first line. Changing a password
 ends all of that account's sessions.
 
-## Creating a game
+## How-to guides
 
-```sh
-go run ./cmd/seiicho create-game --env development --db tmp/seiicho.db
-```
-
-This creates a game and gives a gamemaster seat to the senior active
-administrator: the one with the lowest account ID. It fails if there is no
-active administrator.
+- [How to create a game](docs/how-to/create-a-game.md)
 
 ## Routes
 

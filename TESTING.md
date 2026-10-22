@@ -88,7 +88,8 @@ POST /__agent/log-me-in/<email>?returnTo=/
 
 - Encode the email as a URL path segment and URL-encode the `returnTo` query
   value when necessary.
-- Require an existing account; return an error rather than creating one.
+- Require an existing, active account; return an error rather than creating
+  one, and refuse an inactive account.
 - Establish a normal authenticated session for that account, using the same
   secure cookie policy as ordinary login, then redirect to `returnTo`.
 - Default `returnTo` to `/` when omitted or empty. Accept only safe relative

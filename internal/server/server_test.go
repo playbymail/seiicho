@@ -349,3 +349,36 @@ func TestLogMeInHelper(t *testing.T) {
 		t.Fatalf("cross-site log-me-in = %d, want 403", w.Code)
 	}
 }
+
+func TestLoginRejectsInactiveAccount(t *testing.T) {
+	h, s := newServer(t, "development")
+	addAccount(t, s, "player@example.com", "secret")
+	form := url.Values{"email": {"player@example.com"}, "password": {"secret"}}
+	cookie := sessionCookie(t, do(h, http.MethodPost, "/login", form))
+
+	if err := s.SetAccountActive(t.Context(), "player@example.com", false); err != nil {
+		t.Fatal(err)
+	}
+	if body := readBody(t, do(h, http.MethodGet, "/", nil, cookie)); strings.Contains(body, "Welcome") {
+		t.Error("session of a deactivated account is still authenticated")
+	}
+
+	resp := do(h, http.MethodPost, "/login", form)
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusUnauthorized || len(resp.Cookies()) != 0 {
+		t.Errorf("login to an inactive account = %d with %d cookies", resp.StatusCode, len(resp.Cookies()))
+	}
+	if !strings.Contains(body, "Invalid email or password") {
+		t.Error("login to an inactive account: want the same message as bad credentials")
+	}
+	if resp := do(h, http.MethodPost, "/__dev/log-me-in/player@example.com", nil); resp.StatusCode != http.StatusForbidden || len(resp.Cookies()) != 0 {
+		t.Errorf("log-me-in to an inactive account = %d with %d cookies, want 403", resp.StatusCode, len(resp.Cookies()))
+	}
+
+	if err := s.SetAccountActive(t.Context(), "Player@Example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	if resp := do(h, http.MethodPost, "/login", form); resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("login after reactivation = %d", resp.StatusCode)
+	}
+}

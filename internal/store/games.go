@@ -36,7 +36,7 @@ func (s *Store) CreateGame(ctx context.Context, now time.Time) (g Game, err erro
 	defer end(&err)
 
 	g.GM, err = queryAccount(conn,
-		`SELECT id, email, password_hash, is_admin FROM accounts
+		`SELECT id, email, password_hash, is_admin, is_active FROM accounts
 		 WHERE is_admin = 1 AND is_active = 1 ORDER BY id LIMIT 1;`)
 	if errors.Is(err, ErrNotFound) {
 		return Game{}, ErrNoActiveAdmin
