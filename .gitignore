@@ -22,3 +22,4 @@ coverage.*
 go.work
 go.work.sum
 profile.cov
+/tmp/
