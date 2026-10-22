@@ -36,8 +36,7 @@ func TestLoadInvalidEnvironment(t *testing.T) {
 func TestLoadPrecedence(t *testing.T) {
 	for _, env := range []string{"development", "test", "production", "agent"} {
 		t.Run(env, func(t *testing.T) {
-			for _, key := range []string{ "SEIICHO_TEST_PROCESS", "SEIICHO_TEST_EMPTY", "SEIICHO_TEST_ENV_LOCAL", "SEIICHO_TEST_LOCAL", "SEIICHO_TEST_ENV", "SEIICHO_TEST_BASE",
-			} {
+			for _, key := range []string{"SEIICHO_TEST_PROCESS", "SEIICHO_TEST_EMPTY", "SEIICHO_TEST_ENV_LOCAL", "SEIICHO_TEST_LOCAL", "SEIICHO_TEST_ENV", "SEIICHO_TEST_BASE"} {
 				// Register restoration before removing any inherited value.
 				t.Setenv(key, "")
 				if err := os.Unsetenv(key); err != nil {
