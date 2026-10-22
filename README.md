@@ -15,7 +15,7 @@ applies schema migrations, changes passwords, and activates and deactivates
 accounts. `seiichod` is the web server
 only; it never creates or migrates a database and refuses to start on one whose
 schema is out of date. `seiicho` is the command-line interface to the game
-engine; like the server, it only opens an existing, current database. After pulling a schema change, run:
+engine: it creates games and seats accounts in them; like the server, it only opens an existing, current database. After pulling a schema change, run:
 
 ```sh
 go run ./cmd/seiichodb migrate --env development --db tmp/seiicho.db
@@ -54,6 +54,7 @@ accounts. See [TESTING.md](TESTING.md) for the full list and the HTTP helpers.
 - [How to change an account's password](docs/how-to/change-a-password.md)
 - [How to create a game](docs/how-to/create-a-game.md)
 - [How to deactivate or reactivate an account](docs/how-to/deactivate-an-account.md)
+- [How to seat an account in a game](docs/how-to/seat-an-account.md)
 
 ## Routes
 
