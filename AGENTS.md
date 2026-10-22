@@ -55,6 +55,11 @@ architecture, not a claim that these features are already implemented.
 ## Development and verification
 
 Run `.agents/setup` to prepare a fresh orb with Go and module dependencies.
+Laptop development uses the user's Caddy configuration; agent orbs use Amp
+portals with the `agent` environment, runtime `$PORT`, and `$PUBLIC_URL` as
+described in `PROXIES.md`. Do not change Caddy to accommodate an orb or treat
+portal checks as verification of Caddy's TLS 1.3 configuration.
+
 Before committing, run:
 
 ```sh

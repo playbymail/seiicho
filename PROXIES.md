@@ -11,12 +11,14 @@ an HTTP server has already been implemented.
 - **Do not edit that file or change Caddy configuration.** Do not reconfigure,
   reload, or replace Caddy as part of application development.
 - Test and production deployments also run behind a Caddy reverse proxy.
-  Caddy guarantees TLS 1.3 termination for browser-facing connections.
+  Caddy guarantees TLS 1.3 termination for browser-facing connections on the
+  user's laptop and in test and production. Agent orbs use Amp's portal proxy
+  instead; do not apply the Caddy-specific configuration or TLS guarantee there.
 - The application is the backend, not the TLS terminator. Serve HTTP on the
   configured backend listener; do not add application-side certificates or
   require backend TLS merely because the public URL uses HTTPS.
 
-## Development addresses
+## Laptop development addresses
 
 | Purpose | Address |
 | --- | --- |
@@ -28,6 +30,30 @@ Caddy proxies the browser-facing origin to the application. Keep the public
 origin and backend listen address distinct: redirects, absolute links, and cookie
 policy must reflect the public HTTPS origin, not the backend port. A missing
 proxy connection is not permission to change Caddy configuration.
+
+## Agent orbs
+
+- Use the `agent` environment for agent-local configuration. An orb is a
+  separate machine: its loopback and `.localhost` names do not reach the user's
+  laptop or Caddy. Do not install Caddy to reproduce the laptop setup.
+- Expose the application through an Amp HTTPS portal. Use the generated public
+  URL, not `html-app.localhost:8443`, for browser access inside this environment.
+- Declare the eventual web service in `.amp/services.yaml` and run
+  `amp orb services ensure`. The service command must listen on Amp's `$PORT`;
+  a fixed `port: 18443` may be declared, but do not assume that port is assigned.
+  Use a bind address reachable by the portal, and verify readiness.
+- Use Amp's runtime `$PUBLIC_URL` when configuring the public origin. Never
+  commit a generated portal hostname or reuse the laptop origin in the orb.
+- `.agents/setup` only installs Go and dependencies; it does not configure
+  networking or start servers. Keep long-running web services supervised by Amp,
+  not started from setup. No web service is defined yet.
+- Amp documents forwarding the public `Host` and standard forwarded HTTPS
+  headers. Verify actual Origin and Fetch Metadata handling, normal forms, and
+  HTMX submissions once the server exists; do not assume proxy compatibility
+  solely from the presence of HTTPS.
+- Amp's portal TLS 1.3 guarantee has not been verified. Portal testing is not
+  proof of the Caddy deployment's TLS version or configuration. Keep the same
+  CSRF middleware and secure cookie policy in both environments.
 
 ## Configurable listener
 
@@ -67,7 +93,8 @@ proxy connection is not permission to change Caddy configuration.
   change application state. Requests without both Fetch Metadata and Origin
   headers are also allowed; CSRF protection does not replace authentication or
   authorization.
-- TLS ends at Caddy, so backend `r.TLS` may be nil for a public HTTPS request.
+- TLS ends at Caddy (or Amp's portal proxy in agent orbs), so backend `r.TLS`
+  may be nil for a public HTTPS request.
   Keep session cookies `Secure` and `HttpOnly` and use an appropriate `SameSite`
   policy. Do not downgrade cookie security based on the backend HTTP transport.
 - Keep the backend reachable only through the intended trusted proxy boundary
@@ -86,6 +113,6 @@ proxy connection is not permission to change Caddy configuration.
 - Cover the middleware's Origin fallback with the public host and port, as well
   as rejection of mismatched origins. Keep these checks independent of any live
   Caddy installation where possible using Go HTTP tests.
-- An orb is not the user's local machine: its loopback and `.localhost` names
-  do not reach the user's Caddy. Use the orb's portal mechanism for agent-local
-  browser checks and state when the real Caddy path has not been verified.
+- Use the orb's portal mechanism for agent-local browser checks. Report which
+  proxy path was exercised, and explicitly state when the real Caddy path and
+  its TLS 1.3 configuration have not been verified.
