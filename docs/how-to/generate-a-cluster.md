@@ -89,6 +89,39 @@ giant      256      0    7.6   14
 Add `--json` for the output described in
 [seiicho JSON output](../reference/seiicho-json.md).
 
+## Check the deposits
+
+To see how the game's wealth is divided among the resources, run
+`summarize-deposits` with `--by-resource`:
+
+```sh
+go run ./cmd/seiicho summarize-deposits --env development --db tmp/seiicho.db --game 1 --by-resource
+```
+
+```text
+RESOURCE  QUANTITY      SHARE  DEPOSITS  MIN/STAR   AVG/STAR    MAX/STAR
+gold      48938043097   7.6%   2111      0          307786435   925503250
+fuel      160027875958  24.9%  3212      380729087  1006464629  1826649445
+mets      217553241779  33.8%  3562      156140315  1368259382  2408672120
+nmts      217166119166  33.7%  4010      0          1365824649  2331965621
+```
+
+Across many games the shares come out at about 8.3%, 25%, 33.3%, and 33.3%;
+one game varies a little. Use `--by-planet-type` instead to see the deposits
+and wealth of each planet type and its mix of resources, or
+`--by-planets-per-star` to see that stars hold about the same wealth however
+many planets they have, so that planets of small stars are richer. Give one of
+the three flags.
+
+`show-histogram` also shows deposits: `--deposit-quantity` counts deposits by
+size on a logarithmic scale, `--deposit-yield` by yield, and
+`--deposits-per-planet` counts planets by their number of deposits. Bars of
+these histograms are scaled so that the longest has 50 `#`s.
+
+Add `--json` to either command for the output described in
+[seiicho JSON output](../reference/seiicho-json.md). A game generated before
+deposits were added has none, and these reports print only their headers.
+
 ## Choose the order rows are stored in
 
 By default the command stores stars sorted by their coordinates and letter,

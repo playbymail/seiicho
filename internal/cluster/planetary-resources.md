@@ -9,8 +9,9 @@ Status:
   (`KindWeights`, drawn from the `prng.PlanetKinds` source).
 - **Habitability: approved and implemented** in `planets.go`
   (`drawHabitability`, drawn from the `prng.Habitability` source).
-- **Deposits: approved, not yet implemented.** Step 3 below; planned for
-  `deposits.go`, drawn from new `prng` sources.
+- **Deposits: approved and implemented** in `deposits.go` (`Deposits`
+  and `Budgets`, drawn from the `prng.ResourceBudgets`, `prng.Deposits`, and
+  `prng.DepositYields` sources).
 
 We are generating a game world, not simulating planetary formation. The
 result should be plausible, deterministic, and easy to explain.

@@ -460,3 +460,297 @@ func TestPlanetHistograms(t *testing.T) {
 		}
 	}
 }
+
+// depositGame returns a store with game 1, whose generated cluster it also
+// returns, and a second game whose deposits must not be counted.
+func depositGame(t *testing.T) (*store.Store, []cluster.Star, []cluster.Planet, []cluster.Deposit) {
+	t.Helper()
+	s, err := store.OpenPrivateMemory(t.Context(), memoryName(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	now := time.Unix(1_800_000_000, 0)
+	if _, err := s.CreateAccount(t.Context(), "admin@example.com", []byte("x"), true, now); err != nil {
+		t.Fatal(err)
+	}
+	g, err := s.CreateGame(t.Context(), 1, 2, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stars, planets, deposits, err := s.GenerateCluster(t.Context(), g.ID, store.ClusterOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.CreateGame(t.Context(), 3, 4, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := s.GenerateCluster(t.Context(), other.ID, store.ClusterOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	return s, stars, planets, deposits
+}
+
+// near reports whether a and b are equal to within rounding.
+func near(a, b float64) bool {
+	return math.Abs(a-b) <= 1e-9*max(1, math.Abs(a), math.Abs(b))
+}
+
+func TestDepositSummaries(t *testing.T) {
+	s, stars, planets, deposits := depositGame(t)
+	resources := []string{cluster.Gold, cluster.Fuel, cluster.Metals, cluster.NonMetals}
+
+	// Tally the generated deposits to compare with the stored ones.
+	perStar := make([]map[string]int64, len(stars))
+	for i := range perStar {
+		perStar[i] = map[string]int64{}
+	}
+	perPlanet := make([]int, len(planets))
+	wealth := make([]int64, len(planets))
+	byKind := map[string]map[string]int64{}
+	var total int64
+	for _, d := range deposits {
+		p := planets[d.Planet]
+		perStar[p.Star][d.Resource] += d.Quantity
+		perPlanet[d.Planet]++
+		wealth[d.Planet] += d.Quantity
+		if byKind[p.Kind] == nil {
+			byKind[p.Kind] = map[string]int64{}
+		}
+		byKind[p.Kind][d.Resource] += d.Quantity
+		total += d.Quantity
+	}
+
+	t.Run("by resource", func(t *testing.T) {
+		got, err := s.DepositsByResource(t.Context(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != len(resources) {
+			t.Fatalf("DepositsByResource = %+v, want %d resources", got, len(resources))
+		}
+		for i, r := range resources {
+			w := store.ResourceSummary{Resource: r, MinPerStar: math.MaxInt64}
+			for _, d := range deposits {
+				if d.Resource == r {
+					w.Quantity += d.Quantity
+					w.Deposits++
+				}
+			}
+			for _, m := range perStar {
+				w.MinPerStar, w.MaxPerStar = min(w.MinPerStar, m[r]), max(w.MaxPerStar, m[r])
+			}
+			w.AveragePerStar = float64(w.Quantity) / float64(len(stars))
+			w.Share = float64(w.Quantity) / float64(total)
+			if g := got[i]; g.Resource != w.Resource || g.Quantity != w.Quantity || g.Deposits != w.Deposits ||
+				g.MinPerStar != w.MinPerStar || g.MaxPerStar != w.MaxPerStar ||
+				!near(g.AveragePerStar, w.AveragePerStar) || !near(g.Share, w.Share) {
+				t.Errorf("DepositsByResource[%d] = %+v, want %+v", i, g, w)
+			}
+		}
+	})
+
+	t.Run("by planet type", func(t *testing.T) {
+		got, err := s.DepositsByKind(t.Context(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kinds := []string{cluster.Rocky, cluster.Asteroids, cluster.Giant}
+		if len(got) != len(kinds) {
+			t.Fatalf("DepositsByKind = %+v, want %d kinds", got, len(kinds))
+		}
+		for i, kind := range kinds {
+			w := store.KindDeposits{Kind: kind, MinDeposits: math.MaxInt, MinWealth: math.MaxInt64}
+			var n int
+			var sum int64
+			for j, p := range planets {
+				if p.Kind != kind {
+					continue
+				}
+				w.Planets++
+				n += perPlanet[j]
+				sum += wealth[j]
+				w.MinDeposits, w.MaxDeposits = min(w.MinDeposits, perPlanet[j]), max(w.MaxDeposits, perPlanet[j])
+				w.MinWealth, w.MaxWealth = min(w.MinWealth, wealth[j]), max(w.MaxWealth, wealth[j])
+			}
+			w.AverageDeposits = float64(n) / float64(w.Planets)
+			w.AverageWealth = float64(sum) / float64(w.Planets)
+			k := byKind[kind]
+			w.Shares = store.ResourceShares{
+				Gold: float64(k[cluster.Gold]) / float64(sum), Fuel: float64(k[cluster.Fuel]) / float64(sum),
+				Metals: float64(k[cluster.Metals]) / float64(sum), NonMetals: float64(k[cluster.NonMetals]) / float64(sum),
+			}
+			g := got[i]
+			if g.Kind != w.Kind || g.Planets != w.Planets || g.MinDeposits != w.MinDeposits || g.MaxDeposits != w.MaxDeposits ||
+				g.MinWealth != w.MinWealth || g.MaxWealth != w.MaxWealth ||
+				!near(g.AverageDeposits, w.AverageDeposits) || !near(g.AverageWealth, w.AverageWealth) ||
+				!near(g.Shares.Gold, w.Shares.Gold) || !near(g.Shares.Fuel, w.Shares.Fuel) ||
+				!near(g.Shares.Metals, w.Shares.Metals) || !near(g.Shares.NonMetals, w.Shares.NonMetals) {
+				t.Errorf("DepositsByKind[%d] = %+v, want %+v", i, g, w)
+			}
+		}
+	})
+
+	t.Run("by planets per star", func(t *testing.T) {
+		got, err := s.DepositsByPlanetsPerStar(t.Context(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		size := make([]int, len(stars))
+		starWealth := make([]int64, len(stars))
+		for j, p := range planets {
+			size[p.Star]++
+			starWealth[p.Star] += wealth[j]
+		}
+		type tally struct {
+			stars int
+			sum   int64
+		}
+		want := map[int]*tally{}
+		for i, n := range size {
+			if want[n] == nil {
+				want[n] = &tally{}
+			}
+			want[n].stars++
+			want[n].sum += starWealth[i]
+		}
+		if len(got) != len(want) {
+			t.Fatalf("DepositsByPlanetsPerStar = %+v, want %d sizes", got, len(want))
+		}
+		for i, g := range got {
+			w := want[g.Planets]
+			if i > 0 && g.Planets <= got[i-1].Planets {
+				t.Errorf("DepositsByPlanetsPerStar[%d] is for %d planets, after %d", i, g.Planets, got[i-1].Planets)
+			}
+			if w == nil || g.Stars != w.stars || !near(g.AveragePerStar, float64(w.sum)/float64(w.stars)) ||
+				!near(g.AveragePerPlanet, float64(w.sum)/float64(w.stars*g.Planets)) {
+				t.Errorf("DepositsByPlanetsPerStar[%d] = %+v, want %d stars with %d in all", i, g, w.stars, w.sum)
+			}
+		}
+	})
+
+	checkEmpty(t, s)
+}
+
+func TestDepositHistograms(t *testing.T) {
+	s, _, planets, deposits := depositGame(t)
+
+	quantities, err := s.DepositQuantities(t.Context(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bounds := map[int64]bool{cluster.MinDeposit: true}
+	for p := int64(100_000); p <= 1_000_000_000_000; p *= 10 {
+		bounds[2*p], bounds[5*p], bounds[10*p] = true, true, true
+	}
+	n := 0
+	for i, b := range quantities {
+		if i > 0 && b.Min != quantities[i-1].Max+1 {
+			t.Errorf("quantity bin %+v does not follow %+v", b, quantities[i-1])
+		}
+		if !bounds[b.Min] {
+			t.Errorf("quantity bin %+v does not start at MinDeposit or 1, 2, or 5 times a power of 10", b)
+		}
+		want := 0
+		for _, d := range deposits {
+			if d.Quantity >= b.Min && d.Quantity <= b.Max {
+				want++
+			}
+		}
+		if b.Count != want {
+			t.Errorf("quantity bin %+v, want a count of %d", b, want)
+		}
+		n += b.Count
+	}
+	if n != len(deposits) || quantities[0].Count == 0 || quantities[len(quantities)-1].Count == 0 {
+		t.Errorf("quantity bins %+v count %d deposits, want %d from the smallest bin to the largest", quantities, n, len(deposits))
+	}
+
+	perPlanet := map[int]int{}
+	for _, d := range deposits {
+		perPlanet[d.Planet]++
+	}
+	for _, tc := range []struct {
+		name      string
+		histogram func(context.Context, int64) ([]store.ValueBin, error)
+		hi        int
+		want      map[int]int
+	}{
+		{"DepositYields", s.DepositYields, cluster.MaxYield, func() map[int]int {
+			m := map[int]int{}
+			for _, d := range deposits {
+				m[d.Yield]++
+			}
+			return m
+		}()},
+		{"DepositsPerPlanet", s.DepositsPerPlanet, cluster.MostDeposits, func() map[int]int {
+			m := map[int]int{}
+			for _, n := range perPlanet {
+				m[n]++
+			}
+			return m
+		}()},
+	} {
+		bins, err := tc.histogram(t.Context(), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(bins) != tc.hi {
+			t.Fatalf("%s has %d bins, want %d", tc.name, len(bins), tc.hi)
+		}
+		for i, b := range bins {
+			if b.Value != i+1 || b.Count != tc.want[b.Value] {
+				t.Errorf("%s bin %d = %+v, want %d with a count of %d", tc.name, i, b, i+1, tc.want[i+1])
+			}
+		}
+	}
+	if len(perPlanet) != len(planets) {
+		t.Errorf("%d of %d planets have deposits", len(perPlanet), len(planets))
+	}
+
+	checkEmpty(t, s)
+}
+
+// checkEmpty checks that the deposit reports find no game 999, and nothing
+// for a game without a cluster or for one whose cluster has no deposits,
+// as a game generated before migration 3 has.
+func checkEmpty(t *testing.T, s *store.Store) {
+	t.Helper()
+	g, err := s.CreateGame(t.Context(), 5, 6, time.Unix(1_800_000_000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reports := map[string]func(int64) (int, error){
+		"DepositsByResource": func(id int64) (int, error) { r, err := s.DepositsByResource(t.Context(), id); return len(r), err },
+		"DepositsByKind":     func(id int64) (int, error) { r, err := s.DepositsByKind(t.Context(), id); return len(r), err },
+		"DepositsByPlanetsPerStar": func(id int64) (int, error) {
+			r, err := s.DepositsByPlanetsPerStar(t.Context(), id)
+			return len(r), err
+		},
+		"DepositQuantities": func(id int64) (int, error) { r, err := s.DepositQuantities(t.Context(), id); return len(r), err },
+		"DepositYields":     func(id int64) (int, error) { r, err := s.DepositYields(t.Context(), id); return len(r), err },
+		"DepositsPerPlanet": func(id int64) (int, error) { r, err := s.DepositsPerPlanet(t.Context(), id); return len(r), err },
+	}
+	check := func(when string) {
+		for name, report := range reports {
+			if n, err := report(g.ID); err != nil || n != 0 {
+				t.Errorf("%s %s = %d rows, %v; want none", name, when, n, err)
+			}
+		}
+	}
+	for name, report := range reports {
+		if _, err := report(999); !errors.Is(err, store.ErrGameNotFound) {
+			t.Errorf("%s of a missing game = %v, want ErrGameNotFound", name, err)
+		}
+	}
+	check("without a cluster")
+	if _, _, _, err := s.GenerateCluster(t.Context(), g.ID, store.ClusterOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	withConn(t, s, func(conn *sqlite.Conn) {
+		mustExec(t, conn, `DELETE FROM deposits WHERE planet_id IN (
+			SELECT p.id FROM planets p JOIN stars s ON s.id = p.star_id WHERE s.game_id = ?);`, g.ID)
+	})
+	check("without deposits")
+}

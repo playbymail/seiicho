@@ -13,8 +13,9 @@
 //	seiicho show-account [--env ENV] [--db PATH] --email EMAIL [--json]
 //	seiicho list-games [--env ENV] [--db PATH] [--json]
 //	seiicho list-seats [--env ENV] [--db PATH] --game ID [--json]
-//	seiicho show-histogram [--env ENV] [--db PATH] --game ID (--planets-per-star | --planets-per-star-system) [--json]
+//	seiicho show-histogram [--env ENV] [--db PATH] --game ID (--planets-per-star | --planets-per-star-system | --deposit-quantity | --deposit-yield | --deposits-per-planet) [--json]
 //	seiicho summarize-planets [--env ENV] [--db PATH] --game ID --by-planet-type [--json]
+//	seiicho summarize-deposits [--env ENV] [--db PATH] --game ID (--by-resource | --by-planet-type | --by-planets-per-star) [--json]
 //	seiicho version
 //
 // --env and --db resolve as described in internal/settings. Every command
@@ -62,11 +63,24 @@
 //
 // show-histogram prints a histogram of a game's cluster: with
 // --planets-per-star, how many stars have each number of planets; with
-// --planets-per-star-system, how many star systems do. Give exactly one of
-// them. Each row is a number of planets, from the fewest to the most, its
-// count, and a bar of that many #s; numbers that no star or system has are
-// listed with a count of 0. A game with no cluster has no rows. It fails if
-// there is no such game.
+// --planets-per-star-system, how many star systems do; with
+// --deposit-quantity, how many deposits hold each range of quantities; with
+// --deposit-yield, how many deposits have each yield; and with
+// --deposits-per-planet, how many planets have each number of deposits.
+// Give exactly one of them.
+//
+// For planets, each row is a number of planets, from the fewest to the most,
+// its count, and a bar of that many #s; numbers that no star or system has
+// are listed with a count of 0. For deposits, the bars are scaled so that
+// the longest has 50 #s, and any count above 0 has at least one. Quantities
+// are binned on a logarithmic scale, from 1, 2, or 5 times a power of 10 up
+// to the next such bound, each row labeled with its lower bound, such as
+// 2M; the 100K bin starts at the smallest deposit, 99,999. The bins run from
+// the smallest deposit's to the largest's. Yields have one row per
+// percentage from 1 to 25, and deposits per planet one row per number from 1
+// to 45, including those with a count of 0. A game with no cluster, or
+// whose cluster has no deposits, has no rows. It fails if there is no such
+// game.
 //
 // summarize-planets prints a summary of a game's planets. --by-planet-type,
 // which is required, gives one row per planet type, in the order rocky,
@@ -74,6 +88,26 @@
 // average, and highest habitability of those planets. Types that no planet
 // has are left out, so a game with no cluster has no rows. It fails if there
 // is no such game.
+//
+// summarize-deposits prints a summary of a game's deposits. Give exactly one
+// of these:
+//
+//   - --by-resource gives one row per resource, in the order gold, fuel,
+//     mets, nmts: its total quantity, its share of the game's total, its
+//     number of deposits, and the lowest, average, and highest quantity of
+//     it per star, counting stars without it as 0.
+//   - --by-planet-type gives one row per planet type, in the order rocky,
+//     asteroids, giant: its number of planets; the lowest, average, and
+//     highest number of deposits per planet; the lowest, average, and
+//     highest wealth per planet, the sum of its deposits; and each
+//     resource's share of the type's wealth.
+//   - --by-planets-per-star gives one row for each number of planets that a
+//     star has, from the fewest to the most: the number of such stars, and
+//     their average wealth per star and per planet.
+//
+// Resources and types without deposits, and numbers of planets that no star
+// has, are left out, so a game with no cluster, or whose cluster has no
+// deposits, has no rows. It fails if there is no such game.
 //
 // Commands named list print a table, commands named show print a single
 // record, and commands named summarize print a table of totals. With --json,
@@ -128,6 +162,7 @@ func run(ctx context.Context, args []string) error {
 			listSeatsCommand(),
 			showHistogramCommand(),
 			summarizePlanetsCommand(),
+			summarizeDepositsCommand(),
 			{
 				Name:      "version",
 				Usage:     "seiicho version",
@@ -543,16 +578,63 @@ func yesNo(b bool) string {
 	return "no"
 }
 
-// histogramJSON is a histogram as show-histogram prints it.
+// histogramJSON is a histogram as show-histogram prints it. Bins holds
+// binJSON, quantityBinJSON, yieldBinJSON, or depositsBinJSON values,
+// depending on the histogram.
 type histogramJSON struct {
-	GameID    int64     `json:"game_id"`
-	Histogram string    `json:"histogram"`
-	Bins      []binJSON `json:"bins"`
+	GameID    int64  `json:"game_id"`
+	Histogram string `json:"histogram"`
+	Bins      any    `json:"bins"`
 }
 
 type binJSON struct {
 	Planets int `json:"planets"`
 	Count   int `json:"count"`
+}
+
+type quantityBinJSON struct {
+	MinQuantity int64 `json:"min_quantity"`
+	MaxQuantity int64 `json:"max_quantity"`
+	Count       int   `json:"count"`
+}
+
+type yieldBinJSON struct {
+	YieldPct int `json:"yield_pct"`
+	Count    int `json:"count"`
+}
+
+type depositsBinJSON struct {
+	Deposits int `json:"deposits"`
+	Count    int `json:"count"`
+}
+
+// maxBar is the length of the longest bar of a deposit histogram.
+const maxBar = 50
+
+// scaledBar returns a bar for count when the largest count is top: maxBar #s
+// for top, in proportion and rounded to the nearest for smaller counts, and
+// at least one # for any count above 0.
+func scaledBar(count, top int) string {
+	if count == 0 {
+		return ""
+	}
+	return strings.Repeat("#", max(1, (count*maxBar+top/2)/top))
+}
+
+// shortQuantity formats a quantity to at most three significant digits with
+// a K, M, or B suffix, so 99999 prints as 100K and 2000000000 as 2B.
+func shortQuantity(q int64) string {
+	f, suffix := float64(q), ""
+	for _, u := range []struct {
+		size   float64
+		suffix string
+	}{{1e9, "B"}, {1e6, "M"}, {1e3, "K"}} {
+		if f >= u.size*0.9995 {
+			f, suffix = f/u.size, u.suffix
+			break
+		}
+	}
+	return strconv.FormatFloat(f, 'g', 3, 64) + suffix
 }
 
 func showHistogramCommand() *ff.Command {
@@ -562,9 +644,12 @@ func showHistogramCommand() *ff.Command {
 	}, 0)
 	perStar := s.Flags.BoolLong("planets-per-star", "show the number of planets per star")
 	perSystem := s.Flags.BoolLong("planets-per-star-system", "show the number of planets per star system")
+	quantity := s.Flags.BoolLong("deposit-quantity", "show the quantities of deposits, on a logarithmic scale")
+	yield := s.Flags.BoolLong("deposit-yield", "show the yields of deposits")
+	perPlanet := s.Flags.BoolLong("deposits-per-planet", "show the number of deposits per planet")
 	return &ff.Command{
 		Name:      "show-histogram",
-		Usage:     "seiicho show-histogram [--env ENV] [--db PATH] --game ID (--planets-per-star | --planets-per-star-system) [--json]",
+		Usage:     "seiicho show-histogram [--env ENV] [--db PATH] --game ID (--planets-per-star | --planets-per-star-system | --deposit-quantity | --deposit-yield | --deposits-per-planet) [--json]",
 		ShortHelp: "show a histogram of a game's cluster",
 		Flags:     s.Flags,
 		Exec: settings.NoArgs(func(ctx context.Context) error {
@@ -572,14 +657,70 @@ func showHistogramCommand() *ff.Command {
 			if gameID <= 0 {
 				return errors.New("--game is required and must be a positive game ID")
 			}
-			if *perStar == *perSystem {
-				return errors.New("give exactly one of --planets-per-star or --planets-per-star-system")
+			chosen := 0
+			for _, b := range []bool{*perStar, *perSystem, *quantity, *yield, *perPlanet} {
+				if b {
+					chosen++
+				}
+			}
+			if chosen != 1 {
+				return errors.New("give exactly one of --planets-per-star, --planets-per-star-system, --deposit-quantity, --deposit-yield, or --deposits-per-planet")
 			}
 			db, err := open(ctx, s.Settings)
 			if err != nil {
 				return err
 			}
 			defer db.Close()
+			switch {
+			case *quantity:
+				bins, err := db.DepositQuantities(ctx, gameID)
+				if err != nil {
+					return fmt.Errorf("game %d: %w", gameID, err)
+				}
+				out := make([]quantityBinJSON, 0, len(bins))
+				top := 0
+				for _, b := range bins {
+					out = append(out, quantityBinJSON{MinQuantity: b.Min, MaxQuantity: b.Max, Count: b.Count})
+					top = max(top, b.Count)
+				}
+				rows := [][]string{{"QUANTITY", "DEPOSITS", ""}}
+				for _, b := range bins {
+					rows = append(rows, []string{shortQuantity(b.Min), fmt.Sprint(b.Count), scaledBar(b.Count, top)})
+				}
+				return s.print(histogramJSON{GameID: gameID, Histogram: "deposit-quantity", Bins: out}, rows)
+			case *yield, *perPlanet:
+				name, label, unit, histogram := "deposit-yield", "YIELD", "DEPOSITS", db.DepositYields
+				if *perPlanet {
+					name, label, unit, histogram = "deposits-per-planet", "DEPOSITS", "PLANETS", db.DepositsPerPlanet
+				}
+				bins, err := histogram(ctx, gameID)
+				if err != nil {
+					return fmt.Errorf("game %d: %w", gameID, err)
+				}
+				var out any
+				if *perPlanet {
+					counts := make([]depositsBinJSON, 0, len(bins))
+					for _, b := range bins {
+						counts = append(counts, depositsBinJSON{Deposits: b.Value, Count: b.Count})
+					}
+					out = counts
+				} else {
+					yields := make([]yieldBinJSON, 0, len(bins))
+					for _, b := range bins {
+						yields = append(yields, yieldBinJSON{YieldPct: b.Value, Count: b.Count})
+					}
+					out = yields
+				}
+				top := 0
+				for _, b := range bins {
+					top = max(top, b.Count)
+				}
+				rows := [][]string{{label, unit, ""}}
+				for _, b := range bins {
+					rows = append(rows, []string{fmt.Sprint(b.Value), fmt.Sprint(b.Count), scaledBar(b.Count, top)})
+				}
+				return s.print(histogramJSON{GameID: gameID, Histogram: name, Bins: out}, rows)
+			}
 			name, unit, histogram := "planets-per-star", "STARS", db.PlanetsPerStar
 			if *perSystem {
 				name, unit, histogram = "planets-per-star-system", "SYSTEMS", db.PlanetsPerSystem
@@ -588,13 +729,13 @@ func showHistogramCommand() *ff.Command {
 			if err != nil {
 				return fmt.Errorf("game %d: %w", gameID, err)
 			}
-			out := histogramJSON{GameID: gameID, Histogram: name, Bins: make([]binJSON, 0, len(bins))}
+			out := make([]binJSON, 0, len(bins))
 			rows := [][]string{{"PLANETS", unit, ""}}
 			for _, b := range bins {
-				out.Bins = append(out.Bins, binJSON{Planets: b.Planets, Count: b.Count})
+				out = append(out, binJSON{Planets: b.Planets, Count: b.Count})
 				rows = append(rows, []string{fmt.Sprint(b.Planets), fmt.Sprint(b.Count), strings.Repeat("#", b.Count)})
 			}
-			return s.print(out, rows)
+			return s.print(histogramJSON{GameID: gameID, Histogram: name, Bins: out}, rows)
 		}),
 	}
 }
@@ -651,6 +792,145 @@ func summarizePlanetsCommand() *ff.Command {
 					strconv.FormatFloat(k.AverageHabitability, 'f', 1, 64), fmt.Sprint(k.MaxHabitability)})
 			}
 			return s.print(out, rows)
+		}),
+	}
+}
+
+// depositSummaryJSON is a summary as summarize-deposits prints it. Groups
+// holds resourceSummaryJSON, kindDepositsJSON, or starSizeWealthJSON values,
+// depending on By.
+type depositSummaryJSON struct {
+	GameID int64  `json:"game_id"`
+	By     string `json:"by"`
+	Groups any    `json:"groups"`
+}
+
+type resourceSummaryJSON struct {
+	Resource       string  `json:"resource"`
+	Quantity       int64   `json:"quantity"`
+	Share          float64 `json:"share"`
+	Deposits       int     `json:"deposits"`
+	MinPerStar     int64   `json:"min_per_star"`
+	AveragePerStar float64 `json:"average_per_star"`
+	MaxPerStar     int64   `json:"max_per_star"`
+}
+
+type resourceSharesJSON struct {
+	Gold      float64 `json:"gold"`
+	Fuel      float64 `json:"fuel"`
+	Metals    float64 `json:"mets"`
+	NonMetals float64 `json:"nmts"`
+}
+
+type kindDepositsJSON struct {
+	PlanetType      string             `json:"planet_type"`
+	Planets         int                `json:"planets"`
+	MinDeposits     int                `json:"min_deposits"`
+	AverageDeposits float64            `json:"average_deposits"`
+	MaxDeposits     int                `json:"max_deposits"`
+	MinWealth       int64              `json:"min_wealth"`
+	AverageWealth   float64            `json:"average_wealth"`
+	MaxWealth       int64              `json:"max_wealth"`
+	Shares          resourceSharesJSON `json:"shares"`
+}
+
+type starSizeWealthJSON struct {
+	Planets          int     `json:"planets"`
+	Stars            int     `json:"stars"`
+	AveragePerStar   float64 `json:"average_per_star"`
+	AveragePerPlanet float64 `json:"average_per_planet"`
+}
+
+// percent formats a share from 0 to 1 as a percentage to one decimal place.
+func percent(share float64) string {
+	return strconv.FormatFloat(100*share, 'f', 1, 64) + "%"
+}
+
+// whole formats an average to the nearest whole number.
+func whole(f float64) string {
+	return strconv.FormatFloat(f, 'f', 0, 64)
+}
+
+func summarizeDepositsCommand() *ff.Command {
+	s := newOutputSettings("summarize-deposits")
+	game := s.Flags.Int64Config(ff.FlagConfig{
+		LongName: "game", Placeholder: "ID", NoDefault: true, Usage: "ID of the game (required)",
+	}, 0)
+	byResource := s.Flags.BoolLong("by-resource", "summarize the deposits of each resource")
+	byType := s.Flags.BoolLong("by-planet-type", "summarize the deposits on each type of planet")
+	bySize := s.Flags.BoolLong("by-planets-per-star", "summarize the wealth of stars with each number of planets")
+	return &ff.Command{
+		Name:      "summarize-deposits",
+		Usage:     "seiicho summarize-deposits [--env ENV] [--db PATH] --game ID (--by-resource | --by-planet-type | --by-planets-per-star) [--json]",
+		ShortHelp: "summarize a game's deposits",
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			gameID := *game
+			if gameID <= 0 {
+				return errors.New("--game is required and must be a positive game ID")
+			}
+			chosen := 0
+			for _, b := range []bool{*byResource, *byType, *bySize} {
+				if b {
+					chosen++
+				}
+			}
+			if chosen != 1 {
+				return errors.New("give exactly one of --by-resource, --by-planet-type, or --by-planets-per-star")
+			}
+			db, err := open(ctx, s.Settings)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			switch {
+			case *byResource:
+				summaries, err := db.DepositsByResource(ctx, gameID)
+				if err != nil {
+					return fmt.Errorf("game %d: %w", gameID, err)
+				}
+				groups := make([]resourceSummaryJSON, 0, len(summaries))
+				rows := [][]string{{"RESOURCE", "QUANTITY", "SHARE", "DEPOSITS", "MIN/STAR", "AVG/STAR", "MAX/STAR"}}
+				for _, r := range summaries {
+					groups = append(groups, resourceSummaryJSON{Resource: r.Resource, Quantity: r.Quantity, Share: r.Share,
+						Deposits: r.Deposits, MinPerStar: r.MinPerStar, AveragePerStar: r.AveragePerStar, MaxPerStar: r.MaxPerStar})
+					rows = append(rows, []string{r.Resource, fmt.Sprint(r.Quantity), percent(r.Share), fmt.Sprint(r.Deposits),
+						fmt.Sprint(r.MinPerStar), whole(r.AveragePerStar), fmt.Sprint(r.MaxPerStar)})
+				}
+				return s.print(depositSummaryJSON{GameID: gameID, By: "resource", Groups: groups}, rows)
+			case *byType:
+				summaries, err := db.DepositsByKind(ctx, gameID)
+				if err != nil {
+					return fmt.Errorf("game %d: %w", gameID, err)
+				}
+				groups := make([]kindDepositsJSON, 0, len(summaries))
+				rows := [][]string{{"TYPE", "PLANETS", "MIN-DEP", "AVG-DEP", "MAX-DEP", "MIN-WEALTH", "AVG-WEALTH", "MAX-WEALTH",
+					"GOLD", "FUEL", "METS", "NMTS"}}
+				for _, k := range summaries {
+					sh := k.Shares
+					groups = append(groups, kindDepositsJSON{PlanetType: k.Kind, Planets: k.Planets,
+						MinDeposits: k.MinDeposits, AverageDeposits: k.AverageDeposits, MaxDeposits: k.MaxDeposits,
+						MinWealth: k.MinWealth, AverageWealth: k.AverageWealth, MaxWealth: k.MaxWealth,
+						Shares: resourceSharesJSON{Gold: sh.Gold, Fuel: sh.Fuel, Metals: sh.Metals, NonMetals: sh.NonMetals}})
+					rows = append(rows, []string{k.Kind, fmt.Sprint(k.Planets),
+						fmt.Sprint(k.MinDeposits), strconv.FormatFloat(k.AverageDeposits, 'f', 1, 64), fmt.Sprint(k.MaxDeposits),
+						fmt.Sprint(k.MinWealth), whole(k.AverageWealth), fmt.Sprint(k.MaxWealth),
+						percent(sh.Gold), percent(sh.Fuel), percent(sh.Metals), percent(sh.NonMetals)})
+				}
+				return s.print(depositSummaryJSON{GameID: gameID, By: "planet-type", Groups: groups}, rows)
+			}
+			summaries, err := db.DepositsByPlanetsPerStar(ctx, gameID)
+			if err != nil {
+				return fmt.Errorf("game %d: %w", gameID, err)
+			}
+			groups := make([]starSizeWealthJSON, 0, len(summaries))
+			rows := [][]string{{"PLANETS", "STARS", "AVG/STAR", "AVG/PLANET"}}
+			for _, w := range summaries {
+				groups = append(groups, starSizeWealthJSON{Planets: w.Planets, Stars: w.Stars,
+					AveragePerStar: w.AveragePerStar, AveragePerPlanet: w.AveragePerPlanet})
+				rows = append(rows, []string{fmt.Sprint(w.Planets), fmt.Sprint(w.Stars), whole(w.AveragePerStar), whole(w.AveragePerPlanet)})
+			}
+			return s.print(depositSummaryJSON{GameID: gameID, By: "planets-per-star", Groups: groups}, rows)
 		}),
 	}
 }

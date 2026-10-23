@@ -560,3 +560,314 @@ func TestShowHistogram(t *testing.T) {
 		}
 	}
 }
+
+// depositsDB returns the path of a database holding game 1, created with
+// seed 0x0123456789abcdef, and the flags that select it. The game has no
+// cluster.
+func depositsDB(t *testing.T) []string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "game.db")
+	db, err := store.Create(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateAccount(t.Context(), "admin@example.com", []byte("x"), true, time.Unix(1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	flags := []string{"--env", "test", "--db", path}
+	if err := run(t.Context(), append([]string{"create-game", "--seed", "0x0123456789abcdef"}, flags...)); err != nil {
+		t.Fatal(err)
+	}
+	return flags
+}
+
+func TestSummarizeDeposits(t *testing.T) {
+	flags := depositsDB(t)
+	args := func(extra ...string) []string {
+		return append(append([]string{"summarize-deposits"}, flags...), extra...)
+	}
+
+	if _, err := capture(t, args("--by-resource")...); err == nil || !strings.Contains(err.Error(), "--game is required") {
+		t.Errorf("without --game = %v, want --game is required", err)
+	}
+	for _, extra := range [][]string{{"--game", "1"}, {"--game", "1", "--by-resource", "--by-planet-type"}} {
+		if _, err := capture(t, args(extra...)...); err == nil || !strings.Contains(err.Error(), "exactly one") {
+			t.Errorf("%v = %v, want exactly one grouping", extra, err)
+		}
+	}
+	if _, err := capture(t, args("--game", "2", "--by-resource")...); !errors.Is(err, store.ErrGameNotFound) {
+		t.Errorf("missing game = %v, want ErrGameNotFound", err)
+	}
+	for flag, header := range map[string]string{
+		"--by-resource":         "RESOURCE  QUANTITY  SHARE  DEPOSITS  MIN/STAR  AVG/STAR  MAX/STAR\n",
+		"--by-planet-type":      "TYPE  PLANETS  MIN-DEP  AVG-DEP  MAX-DEP  MIN-WEALTH  AVG-WEALTH  MAX-WEALTH  GOLD  FUEL  METS  NMTS\n",
+		"--by-planets-per-star": "PLANETS  STARS  AVG/STAR  AVG/PLANET\n",
+	} {
+		if got, err := capture(t, args("--game", "1", flag)...); err != nil || got != header {
+			t.Errorf("%s without a cluster = %q, %v; want only the header", flag, got, err)
+		}
+		want := "{\n  \"game_id\": 1,\n  \"by\": \"" + flag[5:] + "\",\n  \"groups\": []\n}\n"
+		if got, err := capture(t, args("--game", "1", flag, "--json")...); err != nil || got != want {
+			t.Errorf("%s without a cluster, --json = %q, %v; want empty groups", flag, got, err)
+		}
+	}
+	if err := run(t.Context(), append([]string{"generate-cluster", "--game", "1"}, flags...)); err != nil {
+		t.Fatal(err)
+	}
+
+	// The seed is fixed, so the summaries are too.
+	for flag, want := range map[string]string{
+		"--by-resource": `RESOURCE  QUANTITY      SHARE  DEPOSITS  MIN/STAR   AVG/STAR    MAX/STAR
+gold      48938043097   7.6%   2111      0          307786435   925503250
+fuel      160027875958  24.9%  3212      380729087  1006464629  1826649445
+mets      217553241779  33.8%  3562      156140315  1368259382  2408672120
+nmts      217166119166  33.7%  4010      0          1365824649  2331965621
+`,
+		"--by-planet-type": `TYPE       PLANETS  MIN-DEP  AVG-DEP  MAX-DEP  MIN-WEALTH  AVG-WEALTH  MAX-WEALTH  GOLD   FUEL   METS   NMTS
+rocky      360      1        15.7     30       56235120    825313464   4186080000  11.5%  21.7%  32.8%  34.0%
+asteroids  105      6        23.4     45       214655025   1052701257  4084080000  13.5%  25.3%  40.7%  20.5%
+giant      256      1        18.7     34       19205316    922026566   4504320000  0.0%   28.6%  31.8%  39.6%
+`,
+		"--by-planets-per-star": `PLANETS  STARS  AVG/STAR    AVG/PLANET
+1        7      3996068571  3996068571
+2        18     3993866667  1996933333
+3        24     4161430000  1387143333
+4        32     4021605000  1005401250
+5        28     4050565714  810113143
+6        23     4021460870  670243478
+7        19     4086012632  583716090
+8        6      3967120000  495890000
+9        1      4092240000  454693333
+10       1      3818880000  381888000
+`,
+	} {
+		if got, err := capture(t, args("--game", "1", flag)...); err != nil || got != want {
+			t.Errorf("summarize-deposits %s = %v\n%s\nwant:\n%s", flag, err, got, want)
+		}
+	}
+
+	got, err := capture(t, args("--game", "1", "--by-resource", "--json")...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var byResource struct {
+		GameID int64  `json:"game_id"`
+		By     string `json:"by"`
+		Groups []struct {
+			Resource       string  `json:"resource"`
+			Quantity       int64   `json:"quantity"`
+			Share          float64 `json:"share"`
+			Deposits       int     `json:"deposits"`
+			MinPerStar     int64   `json:"min_per_star"`
+			AveragePerStar float64 `json:"average_per_star"`
+			MaxPerStar     int64   `json:"max_per_star"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal([]byte(got), &byResource); err != nil {
+		t.Fatal(err)
+	}
+	if byResource.GameID != 1 || byResource.By != "resource" || len(byResource.Groups) != 4 {
+		t.Fatalf("--by-resource --json = %s", got)
+	}
+	deposits, share := 0, 0.0
+	for i, r := range []string{"gold", "fuel", "mets", "nmts"} {
+		g := byResource.Groups[i]
+		deposits += g.Deposits
+		share += g.Share
+		if g.Resource != r || g.AveragePerStar < float64(g.MinPerStar) || g.AveragePerStar > float64(g.MaxPerStar) {
+			t.Errorf("--by-resource --json group %d = %+v", i, g)
+		}
+	}
+	if deposits != 12895 || share < 0.999999 || share > 1.000001 {
+		t.Errorf("--by-resource --json counts %d deposits with shares adding up to %v, want 12895 and 1", deposits, share)
+	}
+
+	got, err = capture(t, args("--game", "1", "--by-planet-type", "--json")...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var byType struct {
+		By     string `json:"by"`
+		Groups []struct {
+			PlanetType      string             `json:"planet_type"`
+			Planets         int                `json:"planets"`
+			AverageDeposits float64            `json:"average_deposits"`
+			Shares          map[string]float64 `json:"shares"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal([]byte(got), &byType); err != nil {
+		t.Fatal(err)
+	}
+	if byType.By != "planet-type" || len(byType.Groups) != 3 {
+		t.Fatalf("--by-planet-type --json = %s", got)
+	}
+	planets := 0
+	for i, kind := range []string{"rocky", "asteroids", "giant"} {
+		g := byType.Groups[i]
+		planets += g.Planets
+		sum := g.Shares["gold"] + g.Shares["fuel"] + g.Shares["mets"] + g.Shares["nmts"]
+		if g.PlanetType != kind || len(g.Shares) != 4 || sum < 0.999999 || sum > 1.000001 {
+			t.Errorf("--by-planet-type --json group %d = %+v", i, g)
+		}
+	}
+	if planets != 721 {
+		t.Errorf("--by-planet-type --json counts %d planets, want 721", planets)
+	}
+
+	got, err = capture(t, args("--game", "1", "--by-planets-per-star", "--json")...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bySize struct {
+		By     string `json:"by"`
+		Groups []struct {
+			Planets          int     `json:"planets"`
+			Stars            int     `json:"stars"`
+			AveragePerStar   float64 `json:"average_per_star"`
+			AveragePerPlanet float64 `json:"average_per_planet"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal([]byte(got), &bySize); err != nil {
+		t.Fatal(err)
+	}
+	stars := 0
+	for _, g := range bySize.Groups {
+		stars += g.Stars
+		if d := g.AveragePerPlanet*float64(g.Planets) - g.AveragePerStar; d < -1 || d > 1 {
+			t.Errorf("--by-planets-per-star --json group %+v", g)
+		}
+	}
+	if bySize.By != "planets-per-star" || stars != 159 {
+		t.Errorf("--by-planets-per-star --json = %s", got)
+	}
+}
+
+func TestShowDepositHistograms(t *testing.T) {
+	flags := depositsDB(t)
+	args := func(extra ...string) []string {
+		return append(append([]string{"show-histogram"}, flags...), extra...)
+	}
+	for _, extra := range [][]string{{"--game", "1", "--deposit-yield", "--deposits-per-planet"}, {"--game", "1", "--planets-per-star", "--deposit-quantity"}} {
+		if _, err := capture(t, args(extra...)...); err == nil || !strings.Contains(err.Error(), "exactly one") {
+			t.Errorf("%v = %v, want exactly one histogram", extra, err)
+		}
+	}
+	for flag, header := range map[string]string{
+		"--deposit-quantity":    "QUANTITY  DEPOSITS\n",
+		"--deposit-yield":       "YIELD  DEPOSITS\n",
+		"--deposits-per-planet": "DEPOSITS  PLANETS\n",
+	} {
+		if got, err := capture(t, args("--game", "1", flag)...); err != nil || got != header {
+			t.Errorf("%s without a cluster = %q, %v; want only the header", flag, got, err)
+		}
+	}
+	if err := run(t.Context(), append([]string{"generate-cluster", "--game", "1"}, flags...)); err != nil {
+		t.Fatal(err)
+	}
+
+	// The seed is fixed, so the quantity histogram is too. The longest bar
+	// has maxBar #s, and every count above 0 has at least one.
+	want := `QUANTITY  DEPOSITS
+2M        24        #
+5M        411       ###
+10M       2018      #################
+20M       6037      ##################################################
+50M       3195      ##########################
+100M      1024      ########
+200M      173       #
+500M      11        #
+1B        2         #
+`
+	if got, err := capture(t, args("--game", "1", "--deposit-quantity")...); err != nil || got != want {
+		t.Errorf("--deposit-quantity = %v\n%s\nwant:\n%s", err, got, want)
+	}
+
+	for _, tc := range []struct {
+		flag, label, unit string
+		bins, total       int
+	}{
+		{"--deposit-yield", "YIELD", "DEPOSITS", 25, 12895},
+		{"--deposits-per-planet", "DEPOSITS", "PLANETS", 45, 721},
+	} {
+		got, err := capture(t, args("--game", "1", tc.flag)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+		if fields := strings.Fields(lines[0]); len(fields) != 2 || fields[0] != tc.label || fields[1] != tc.unit {
+			t.Errorf("%s header = %q", tc.flag, lines[0])
+		}
+		if len(lines) != tc.bins+1 {
+			t.Fatalf("%s has %d bins, want %d", tc.flag, len(lines)-1, tc.bins)
+		}
+		count, longest := 0, 0
+		for i, line := range lines[1:] {
+			if strings.HasSuffix(line, " ") {
+				t.Errorf("%s line %q has trailing spaces", tc.flag, line)
+			}
+			fields := strings.Fields(line)
+			v, _ := strconv.Atoi(fields[0])
+			n, _ := strconv.Atoi(fields[1])
+			bar := ""
+			if len(fields) == 3 {
+				bar = fields[2]
+			}
+			if v != i+1 || (n == 0) != (bar == "") || strings.Trim(bar, "#") != "" {
+				t.Errorf("%s line %q", tc.flag, line)
+			}
+			count += n
+			longest = max(longest, len(bar))
+		}
+		if count != tc.total || longest != maxBar {
+			t.Errorf("%s counts %d with a longest bar of %d, want %d and %d", tc.flag, count, longest, tc.total, maxBar)
+		}
+	}
+
+	got, err := capture(t, args("--game", "1", "--deposit-quantity", "--json")...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var quantity struct {
+		Histogram string `json:"histogram"`
+		Bins      []struct {
+			MinQuantity int64 `json:"min_quantity"`
+			MaxQuantity int64 `json:"max_quantity"`
+			Count       int   `json:"count"`
+		} `json:"bins"`
+	}
+	if err := json.Unmarshal([]byte(got), &quantity); err != nil {
+		t.Fatal(err)
+	}
+	if quantity.Histogram != "deposit-quantity" || len(quantity.Bins) != 9 ||
+		quantity.Bins[0].MinQuantity != 2_000_000 || quantity.Bins[0].MaxQuantity != 4_999_999 || quantity.Bins[0].Count != 24 {
+		t.Errorf("--deposit-quantity --json = %s", got)
+	}
+	for flag, field := range map[string]string{"--deposit-yield": "yield_pct", "--deposits-per-planet": "deposits"} {
+		got, err := capture(t, args("--game", "1", flag, "--json")...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			Histogram string           `json:"histogram"`
+			Bins      []map[string]int `json:"bins"`
+		}
+		if err := json.Unmarshal([]byte(got), &out); err != nil {
+			t.Fatal(err)
+		}
+		if "--"+out.Histogram != flag || len(out.Bins) == 0 || len(out.Bins[0]) != 2 || out.Bins[0][field] != 1 {
+			t.Errorf("%s --json = %s", flag, got)
+		}
+	}
+}
+
+func TestShortQuantity(t *testing.T) {
+	for q, want := range map[int64]string{
+		99_999: "100K", 200_000: "200K", 999_999: "1M", 2_000_000: "2M", 50_000_000: "50M",
+		1_000_000_000: "1B", 4_692_000_000: "4.69B", 999: "999",
+	} {
+		if got := shortQuantity(q); got != want {
+			t.Errorf("shortQuantity(%d) = %q, want %q", q, got, want)
+		}
+	}
+}
