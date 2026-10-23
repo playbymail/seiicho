@@ -299,6 +299,105 @@ func TestFlagHomeWorld(t *testing.T) {
 	}
 }
 
+func TestAssignSeat(t *testing.T) {
+	flags := depositsDB(t)
+	db, err := store.Open(t.Context(), flags[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, email := range []string{"red@example.com", "blue@example.com"} {
+		a, err := db.CreateAccount(t.Context(), email, []byte("x"), false, time.Unix(1, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.AddSeat(t.Context(), 1, a.ID, false, time.Unix(1, 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	args := func(extra ...string) []string {
+		return append(append([]string{"assign-seat"}, flags...), extra...)
+	}
+	flagHome := func() {
+		t.Helper()
+		if _, err := capture(t, append([]string{"flag-home-world", "--game", "1", "--min-home-distance", "6", "--max-neighbor-distance", "6"}, flags...)...); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The flags are checked before the database is opened.
+	bad := []string{"--env", "test", "--db", filepath.Join(t.TempDir(), "missing.db")}
+	for _, tc := range []struct {
+		extra []string
+		want  string
+	}{
+		{[]string{"--seat", "2"}, "--game is required"},
+		{[]string{"--game", "1"}, "--seat is required"},
+		{[]string{"--game", "1", "--seat", "2", "--planet", "0"}, "--planet must be a positive planet ID"},
+		{[]string{"--game", "1", "--seat", "2", "--name", " \t "}, "--name: name is empty"},
+		{[]string{"--game", "1", "--seat", "2", "--name", "Café"}, "--name: name has a character that is not allowed"},
+		{[]string{"--game", "1", "--seat", "2", "--name", strings.Repeat("x", 26)}, "--name: name is longer than 25 characters"},
+	} {
+		a := append(append([]string{"assign-seat"}, bad...), tc.extra...)
+		if _, err := capture(t, a...); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%v = %v, want %q", tc.extra, err, tc.want)
+		}
+	}
+	if err := run(t.Context(), append([]string{"generate-cluster", "--game", "1"}, flags...)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := capture(t, args("--game", "1", "--seat", "2")...); !errors.Is(err, store.ErrNoOpenHomeWorld) {
+		t.Errorf("assign-seat before flagging = %v, want ErrNoOpenHomeWorld", err)
+	}
+
+	// The first home world of the seed, as TestFlagHomeWorld pins it.
+	flagHome()
+	got, err := capture(t, args("--game", "1", "--seat", "2", "--name", "  Red\tStar ")...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := regexp.MustCompile(`^assigned seat 2 in game 1 to planet \d+ \(system 5 3 14, star A, orbit 4\): empire 1 "Red Star", race 1\n$`); !want.MatchString(got) {
+		t.Errorf("assign-seat = %q, want a match for %s", got, want)
+	}
+	if _, err := capture(t, args("--game", "1", "--seat", "1")...); !errors.Is(err, store.ErrGamemasterSeat) {
+		t.Errorf("assign-seat of the gamemaster = %v, want ErrGamemasterSeat", err)
+	}
+
+	flagHome()
+	_, err = capture(t, args("--game", "1", "--seat", "3")...)
+	if !errors.Is(err, store.ErrOpenHomeWorlds) || !strings.Contains(err.Error(), "; name one with --planet") {
+		t.Errorf("assign-seat with two open home worlds = %v, want them listed", err)
+	}
+	var open *store.OpenHomeWorldsError
+	if !errors.As(err, &open) || len(open.PlanetIDs) != 2 {
+		t.Fatalf("assign-seat with two open home worlds = %v, want two planets", err)
+	}
+	got, err = capture(t, args("--game", "1", "--seat", "3", "--planet", strconv.FormatInt(open.PlanetIDs[1], 10), "--json")...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var e empireJSON
+	if err := json.Unmarshal([]byte(got), &e); err != nil {
+		t.Fatalf("assign-seat --json = %q: %v", got, err)
+	}
+	// Planet IDs follow the sorted cluster, so the second home world, at
+	// 26 18 17, has the higher ID.
+	if e != (empireJSON{GameID: 1, SeatID: 3, FactionID: 2, Name: "Unnamed Faction", RaceID: 2, PlanetID: open.PlanetIDs[1], X: 26, Y: 18, Z: 17, Star: "A", Orbit: 3}) {
+		t.Errorf("assign-seat --json = %+v, want Unnamed Faction of race 2 on 26 18 17 A orbit 3", e)
+	}
+
+	got, err = capture(t, append([]string{"list-seats", "--game", "1"}, flags...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := regexp.MustCompile(`(?m)^2 +2 +red@example\.com +player +yes +[-0-9: ]+ +1 +\d+ +Red Star$`); !want.MatchString(got) {
+		t.Errorf("list-seats = %q, want seat 2 with empire 1, Red Star", got)
+	}
+	if _, err := capture(t, append([]string{"promote-seat", "--game", "1", "--account", "2"}, flags...)...); !errors.Is(err, store.ErrSeatAssigned) {
+		t.Errorf("promote-seat of a seat with an empire = %v, want ErrSeatAssigned", err)
+	}
+}
+
 // capture runs the command that args select and returns what it printed.
 func capture(t *testing.T, args ...string) (string, error) {
 	t.Helper()
@@ -388,7 +487,7 @@ func TestListAndShow(t *testing.T) {
 ]
 `},
 		{[]string{"list-seats", "--game", "1"}, "" +
-			"SEAT  ACCOUNT  EMAIL               ROLE        ACTIVE  CREATED\n" +
+			"SEAT  ACCOUNT  EMAIL               ROLE        ACTIVE  CREATED              EMPIRE  HOME  NAME\n" +
 			"1     1        admin@example.com   gamemaster  yes     2026-10-22 15:04:05\n" +
 			"2     2        player@example.com  player      yes     2026-10-22 16:04:05\n"},
 		{[]string{"list-seats", "--game", "1", "--json"}, `[
@@ -399,7 +498,10 @@ func TestListAndShow(t *testing.T) {
     "email": "admin@example.com",
     "is_gm": true,
     "is_active": true,
-    "created_at": "2026-10-22T15:04:05Z"
+    "created_at": "2026-10-22T15:04:05Z",
+    "empire_id": null,
+    "empire_name": null,
+    "home_planet_id": null
   },
   {
     "id": 2,
@@ -408,7 +510,10 @@ func TestListAndShow(t *testing.T) {
     "email": "player@example.com",
     "is_gm": false,
     "is_active": true,
-    "created_at": "2026-10-22T16:04:05Z"
+    "created_at": "2026-10-22T16:04:05Z",
+    "empire_id": null,
+    "empire_name": null,
+    "home_planet_id": null
   }
 ]
 `},

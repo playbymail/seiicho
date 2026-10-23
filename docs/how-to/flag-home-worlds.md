@@ -36,7 +36,8 @@ lowest habitability. Flagging sets the planet's habitability to 25 and makes
 its deposits richer: each yield rises by 1 to 10 percentage points, to at most
 75%, and each quantity by 25%.
 
-Run the command again for each further home world.
+Run the command again for each further home world. Then assign seats to
+them; see [How to assign a seat to a home world](assign-a-seat.md).
 
 ## Choose the distances
 

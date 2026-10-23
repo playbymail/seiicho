@@ -1,6 +1,6 @@
 # How to find account, game, and seat IDs
 
-`seiicho add-seat` and `seiicho promote-seat` take IDs, not emails. Look them up
+`seiicho add-seat`, `seiicho promote-seat`, and `seiicho assign-seat` take IDs, not emails. Look them up
 with the `list` and `show` commands. All of them only read the database.
 
 Commands named `list` print a table; commands named `show` print one record.
@@ -64,13 +64,15 @@ go run ./cmd/seiicho list-seats --env development --db tmp/seiicho.db --game 1
 ```
 
 ```text
-SEAT  ACCOUNT  EMAIL               ROLE        ACTIVE  CREATED
+SEAT  ACCOUNT  EMAIL               ROLE        ACTIVE  CREATED              EMPIRE  HOME  NAME
 1     1        admin@example.com   gamemaster  yes     2026-10-22 20:33:56
-2     2        acct01@example.com  player      yes     2026-10-22 20:33:56
+2     2        acct01@example.com  player      yes     2026-10-22 20:33:56  1       136   Red Star
 ```
 
 Seats are listed in seat ID order, active or not, so this also shows why
-`add-seat` reports that an account already has a seat. The command fails with
+`add-seat` reports that an account already has a seat. For a seat assigned
+to a home world, `EMPIRE` is its empire's faction ID, `HOME` its home world's
+planet ID, and `NAME` the empire's name; they are blank for other seats. The command fails with
 `game 1: game not found` if there is no such game.
 
 ## Filter the output with jq

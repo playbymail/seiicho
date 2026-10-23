@@ -128,8 +128,9 @@ func (s *Store) AddSeat(ctx context.Context, gameID, accountID int64, isGM bool,
 // PromoteSeat makes an account's seat in a game a gamemaster seat and returns
 // the seat's ID. Both the game and the account must exist and be active, and
 // the account must have an active seat in the game; otherwise it returns
-// ErrNoActiveSeat. promoted is false if the seat was already a gamemaster
-// seat, in which case nothing changes.
+// ErrNoActiveSeat. Gamemasters never play, so it returns ErrSeatAssigned if
+// the seat has an empire. promoted is false if the seat was already a
+// gamemaster seat, in which case nothing changes.
 func (s *Store) PromoteSeat(ctx context.Context, gameID, accountID int64) (seatID int64, promoted bool, err error) {
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
@@ -146,25 +147,28 @@ func (s *Store) PromoteSeat(ctx context.Context, gameID, accountID int64) (seatI
 	if err := checkGameAndAccount(conn, gameID, accountID); err != nil {
 		return 0, false, err
 	}
-	found, isGM := false, false
+	found, isGM, assigned := false, false, false
 	err = sqlitex.Execute(conn,
-		`SELECT id, is_gm FROM seats WHERE game_id = ? AND account_id = ? AND is_active = 1;`,
+		`SELECT id, is_gm, EXISTS (SELECT 1 FROM factions WHERE seat_id = s.id AND is_empire = 1)
+		 FROM seats s WHERE game_id = ? AND account_id = ? AND is_active = 1;`,
 		&sqlitex.ExecOptions{
 			Args: []any{gameID, accountID},
 			ResultFunc: func(stmt *sqlite.Stmt) error {
 				found = true
-				seatID, isGM = stmt.ColumnInt64(0), stmt.ColumnBool(1)
+				seatID, isGM, assigned = stmt.ColumnInt64(0), stmt.ColumnBool(1), stmt.ColumnBool(2)
 				return nil
 			},
 		})
 	if err != nil {
 		return 0, false, err
 	}
-	if !found {
+	switch {
+	case !found:
 		return 0, false, ErrNoActiveSeat
-	}
-	if isGM {
+	case isGM:
 		return seatID, false, nil
+	case assigned:
+		return 0, false, ErrSeatAssigned
 	}
 	err = sqlitex.Execute(conn, `UPDATE seats SET is_gm = 1 WHERE id = ?;`,
 		&sqlitex.ExecOptions{Args: []any{seatID}})
@@ -243,6 +247,11 @@ type Seat struct {
 	IsGM      bool
 	IsActive  bool
 	CreatedAt time.Time
+	// EmpireID, EmpireName, and HomePlanetID describe the seat's empire.
+	// They are zero if the seat has none.
+	EmpireID     int64
+	EmpireName   string
+	HomePlanetID int64
 }
 
 // Seats returns every seat in a game, active or not, ordered by seat ID. The
@@ -272,8 +281,10 @@ func (s *Store) Seats(ctx context.Context, gameID int64) (seats []Seat, err erro
 		return nil, ErrGameNotFound
 	}
 	err = sqlitex.Execute(conn,
-		`SELECT s.id, s.game_id, s.account_id, a.email, s.is_gm, s.is_active, s.created_at
+		`SELECT s.id, s.game_id, s.account_id, a.email, s.is_gm, s.is_active, s.created_at,
+		        coalesce(f.id, 0), coalesce(f.name, ''), coalesce(f.home_planet_id, 0)
 		 FROM seats s JOIN accounts a ON a.id = s.account_id
+		 LEFT JOIN factions f ON f.seat_id = s.id AND f.is_empire = 1
 		 WHERE s.game_id = ? ORDER BY s.id;`,
 		&sqlitex.ExecOptions{
 			Args: []any{gameID},
@@ -286,6 +297,10 @@ func (s *Store) Seats(ctx context.Context, gameID int64) (seats []Seat, err erro
 					IsGM:      stmt.ColumnBool(4),
 					IsActive:  stmt.ColumnBool(5),
 					CreatedAt: time.Unix(stmt.ColumnInt64(6), 0),
+
+					EmpireID:     stmt.ColumnInt64(7),
+					EmpireName:   stmt.ColumnText(8),
+					HomePlanetID: stmt.ColumnInt64(9),
 				})
 				return nil
 			},

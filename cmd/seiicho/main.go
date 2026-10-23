@@ -10,6 +10,7 @@
 //	seiicho flag-home-world [--env ENV] [--db PATH] --game ID --min-home-distance N --max-neighbor-distance N [--json]
 //	seiicho add-seat [--env ENV] [--db PATH] --game ID --account ID [--gamemaster]
 //	seiicho promote-seat [--env ENV] [--db PATH] --game ID --account ID
+//	seiicho assign-seat [--env ENV] [--db PATH] --game ID --seat ID [--planet ID] [--name NAME] [--json]
 //	seiicho list-accounts [--env ENV] [--db PATH] [--json]
 //	seiicho show-account [--env ENV] [--db PATH] --email EMAIL [--json]
 //	seiicho list-games [--env ENV] [--db PATH] [--json]
@@ -56,8 +57,23 @@
 // or if the account already has a seat in the game, active or not.
 //
 // promote-seat makes an account's seat in a game a gamemaster seat. It fails
-// if the game or the account is missing or inactive, or if the account has no
-// active seat in the game. Promoting a gamemaster changes nothing.
+// if the game or the account is missing or inactive, if the account has no
+// active seat in the game, or if the seat has an empire: gamemasters never
+// play. Promoting a gamemaster changes nothing.
+//
+// assign-seat creates a seat's empire on a home world, as
+// internal/store/seat-assignment.md describes. --planet names the home
+// world; without it, the game must have exactly one open home world, one with
+// fewer than 15 seats assigned, and the seat goes there. The first seat on a
+// home world creates its race. --name names the empire, which is otherwise
+// Unnamed Faction; it is cleaned as internal/names describes and must then be
+// 1 to 25 printable ASCII characters other than '"' and '\'. It prints the
+// empire's faction ID and name, its race's ID, and its home world's planet
+// ID, system coordinates, star letter, and orbit. It fails if the game is
+// missing or inactive; if the seat is not an active player seat in the game
+// without an empire; if the planet is not a home world in the game or has 15
+// seats; or, without --planet, if the game has no open home world or more
+// than one, which it lists.
 //
 // list-accounts prints every account's ID, email, and whether it is an
 // administrator and active.
@@ -71,8 +87,9 @@
 //
 // list-seats prints every seat in a game, active or not: the seat ID, the
 // account's ID and email, whether it is a gamemaster or player seat, whether
-// it is active, and when it was created (in UTC). It fails if there is no such
-// game.
+// it is active, when it was created (in UTC), and, if it has an empire, the
+// empire's faction ID and name and its home world's planet ID. It fails if
+// there is no such game.
 //
 // show-histogram prints a histogram of a game's cluster: with
 // --planets-per-star, how many stars have each number of planets; with
@@ -126,9 +143,8 @@
 // Commands named list print a table, commands named show print a single
 // record, and commands named summarize print a table of totals. With --json,
 // a list command prints a JSON array instead, and a show or summarize
-// command, or flag-home-world, prints a JSON object; times are RFC 3339 in
-// UTC. The JSON never
-// includes password hashes.
+// command, flag-home-world, or assign-seat prints a JSON object; times are
+// RFC 3339 in UTC. The JSON never includes password hashes.
 package main
 
 import (
@@ -146,6 +162,7 @@ import (
 	"github.com/peterbourgon/ff/v4"
 	"github.com/playbymail/seiicho"
 	"github.com/playbymail/seiicho/internal/cluster"
+	"github.com/playbymail/seiicho/internal/names"
 	"github.com/playbymail/seiicho/internal/prng"
 	"github.com/playbymail/seiicho/internal/settings"
 	"github.com/playbymail/seiicho/internal/store"
@@ -173,6 +190,7 @@ func run(ctx context.Context, args []string) error {
 			flagHomeWorldCommand(),
 			addSeatCommand(),
 			promoteSeatCommand(),
+			assignSeatCommand(),
 			listAccountsCommand(),
 			showAccountCommand(),
 			listGamesCommand(),
@@ -439,6 +457,83 @@ func promoteSeatCommand() *ff.Command {
 	}
 }
 
+// empireJSON is an empire as assign-seat prints it.
+type empireJSON struct {
+	GameID    int64  `json:"game_id"`
+	SeatID    int64  `json:"seat_id"`
+	FactionID int64  `json:"faction_id"`
+	Name      string `json:"name"`
+	RaceID    int64  `json:"race_id"`
+	PlanetID  int64  `json:"planet_id"`
+	X         int    `json:"x"`
+	Y         int    `json:"y"`
+	Z         int    `json:"z"`
+	Star      string `json:"star"`
+	Orbit     int    `json:"orbit"`
+}
+
+func assignSeatCommand() *ff.Command {
+	s := newOutputSettings("assign-seat")
+	game := s.Flags.Int64Config(ff.FlagConfig{
+		LongName: "game", Placeholder: "ID", NoDefault: true, Usage: "ID of the game (required)",
+	}, 0)
+	seat := s.Flags.Int64Config(ff.FlagConfig{
+		LongName: "seat", Placeholder: "ID", NoDefault: true, Usage: "ID of the seat (required)",
+	}, 0)
+	planet := s.Flags.Int64Config(ff.FlagConfig{
+		LongName: "planet", Placeholder: "ID", NoDefault: true,
+		Usage: "ID of the home world (default: the game's only open home world)",
+	}, 0)
+	name := s.Flags.StringConfig(ff.FlagConfig{
+		LongName: "name", Placeholder: "NAME", NoDefault: true,
+		Usage: "name of the empire (default: " + store.DefaultFactionName + ")",
+	}, "")
+	return &ff.Command{
+		Name:      "assign-seat",
+		Usage:     "seiicho assign-seat [--env ENV] [--db PATH] --game ID --seat ID [--planet ID] [--name NAME] [--json]",
+		ShortHelp: "create a seat's empire on a home world",
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			gameID, seatID, planetID := *game, *seat, *planet
+			if gameID <= 0 {
+				return errors.New("--game is required and must be a positive game ID")
+			}
+			if seatID <= 0 {
+				return errors.New("--seat is required and must be a positive seat ID")
+			}
+			if f, ok := s.Flags.GetFlag("planet"); ok && f.IsSet() && planetID <= 0 {
+				return errors.New("--planet must be a positive planet ID")
+			}
+			empireName := ""
+			if f, ok := s.Flags.GetFlag("name"); ok && f.IsSet() {
+				var err error
+				if empireName, err = names.Clean(*name); err != nil {
+					return fmt.Errorf("--name: %w", err)
+				}
+			}
+			db, err := open(ctx, s.Settings)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			e, err := db.AssignSeat(ctx, gameID, seatID, planetID, empireName, time.Now())
+			if errors.Is(err, store.ErrOpenHomeWorlds) {
+				return fmt.Errorf("game %d, seat %d: %w; name one with --planet", gameID, seatID, err)
+			} else if err != nil {
+				return fmt.Errorf("game %d, seat %d: %w", gameID, seatID, err)
+			}
+			h := e.Home
+			if s.json {
+				return s.print(empireJSON{GameID: gameID, SeatID: e.SeatID, FactionID: e.FactionID, Name: e.Name, RaceID: e.RaceID,
+					PlanetID: h.PlanetID, X: h.X, Y: h.Y, Z: h.Z, Star: h.Seq, Orbit: h.Orbit}, nil)
+			}
+			_, err = fmt.Fprintf(stdout, "assigned seat %d in game %d to planet %d (system %d %d %d, star %s, orbit %d): empire %d %q, race %d\n",
+				e.SeatID, gameID, h.PlanetID, h.X, h.Y, h.Z, h.Seq, h.Orbit, e.FactionID, e.Name, e.RaceID)
+			return err
+		}),
+	}
+}
+
 // outputSettings are the settings of a command that prints a table, or JSON
 // with --json.
 type outputSettings struct {
@@ -604,6 +699,10 @@ type seatJSON struct {
 	IsGM      bool      `json:"is_gm"`
 	IsActive  bool      `json:"is_active"`
 	CreatedAt time.Time `json:"created_at"`
+	// The seat's empire; null if it has none.
+	EmpireID     *int64  `json:"empire_id"`
+	EmpireName   *string `json:"empire_name"`
+	HomePlanetID *int64  `json:"home_planet_id"`
 }
 
 func listSeatsCommand() *ff.Command {
@@ -631,16 +730,22 @@ func listSeatsCommand() *ff.Command {
 				return fmt.Errorf("game %d: %w", gameID, err)
 			}
 			out := make([]seatJSON, 0, len(seats))
-			rows := [][]string{{"SEAT", "ACCOUNT", "EMAIL", "ROLE", "ACTIVE", "CREATED"}}
+			rows := [][]string{{"SEAT", "ACCOUNT", "EMAIL", "ROLE", "ACTIVE", "CREATED", "EMPIRE", "HOME", "NAME"}}
 			for _, st := range seats {
-				out = append(out, seatJSON{ID: st.ID, GameID: st.GameID, AccountID: st.AccountID, Email: st.Email,
-					IsGM: st.IsGM, IsActive: st.IsActive, CreatedAt: st.CreatedAt.UTC()})
+				j := seatJSON{ID: st.ID, GameID: st.GameID, AccountID: st.AccountID, Email: st.Email,
+					IsGM: st.IsGM, IsActive: st.IsActive, CreatedAt: st.CreatedAt.UTC()}
 				role := "player"
 				if st.IsGM {
 					role = "gamemaster"
 				}
-				rows = append(rows, []string{fmt.Sprint(st.ID), fmt.Sprint(st.AccountID), st.Email, role,
-					yesNo(st.IsActive), st.CreatedAt.UTC().Format(time.DateTime)})
+				row := []string{fmt.Sprint(st.ID), fmt.Sprint(st.AccountID), st.Email, role,
+					yesNo(st.IsActive), st.CreatedAt.UTC().Format(time.DateTime), "", "", ""}
+				if st.EmpireID != 0 {
+					j.EmpireID, j.EmpireName, j.HomePlanetID = &st.EmpireID, &st.EmpireName, &st.HomePlanetID
+					row[6], row[7], row[8] = fmt.Sprint(st.EmpireID), fmt.Sprint(st.HomePlanetID), st.EmpireName
+				}
+				out = append(out, j)
+				rows = append(rows, row)
 			}
 			return s.print(out, rows)
 		}),

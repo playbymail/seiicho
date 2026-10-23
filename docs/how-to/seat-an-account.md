@@ -82,6 +82,12 @@ seat, use `promote-seat`.
 From `promote-seat`: the account has no seat in the game, or its seat is
 inactive; `seiicho list-seats --game ID` shows which. Use `add-seat --gamemaster` to seat an account that has no seat.
 
+### `seat already has an empire`
+
+From `promote-seat`: the seat has been assigned to a home world, and
+gamemasters never play, so it cannot become a gamemaster seat. Seat a
+different account as the gamemaster instead.
+
 ### `--game is required` or `--account is required`
 
 Give both `--game` and `--account` as positive IDs.

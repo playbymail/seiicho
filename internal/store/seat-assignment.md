@@ -2,7 +2,8 @@
 
 How the gamemaster gives a seat its starting faction on a home world.
 
-Status: **draft**, not yet approved.
+Status: **approved and implemented** in `factions.go` (`AssignSeat`), with
+name cleaning in `internal/names`.
 
 A seat can start the game only on a planet that has been flagged as a home
 world (see `internal/cluster/home-worlds.md`). This document covers the step

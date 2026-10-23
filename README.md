@@ -15,7 +15,7 @@ applies schema migrations, changes passwords, and activates and deactivates
 accounts. `seiichod` is the web server
 only; it never creates or migrates a database and refuses to start on one whose
 schema is out of date. `seiicho` is the command-line interface to the game
-engine: it creates games, generates their clusters of star systems, seats accounts in them, and lists accounts, games, and seats with their IDs, as tables or JSON; like the server, it only opens an existing, current database. After pulling a schema change, run:
+engine: it creates games, generates their clusters of star systems, flags home worlds, seats accounts in them and assigns the seats to home worlds, and lists accounts, games, and seats with their IDs, as tables or JSON; like the server, it only opens an existing, current database. After pulling a schema change, run:
 
 ```sh
 go run ./cmd/seiichodb migrate --env development --db tmp/seiicho.db
@@ -54,6 +54,7 @@ accounts. See [TESTING.md](TESTING.md) for the full list and the HTTP helpers.
 
 ## How-to guides
 
+- [How to assign a seat to a home world](docs/how-to/assign-a-seat.md)
 - [How to change an account's password](docs/how-to/change-a-password.md)
 - [How to create a game](docs/how-to/create-a-game.md)
 - [How to deactivate or reactivate an account](docs/how-to/deactivate-an-account.md)

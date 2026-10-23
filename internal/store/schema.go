@@ -101,6 +101,56 @@ var schema = sqlitemigration.Schema{
 			quantity  INTEGER NOT NULL CHECK (quantity >= 99999),
 			yield_pct INTEGER NOT NULL CHECK (yield_pct BETWEEN 1 AND 75),
 			UNIQUE (planet_id, no)
-		) STRICT;`,
+		) STRICT;
+
+		-- A race is the people of exactly one home world. It is created when
+		-- the first seat is assigned to that planet. The second unique key is
+		-- the target of factions' composite foreign key.
+		CREATE TABLE races (
+			id        INTEGER PRIMARY KEY AUTOINCREMENT,
+			planet_id INTEGER NOT NULL UNIQUE REFERENCES planets (id),
+			UNIQUE (id, planet_id)
+		) STRICT;
+
+		-- A faction acts in the game. It is controlled by exactly one seat or
+		-- exactly one other faction. Control must not form cycles; the schema
+		-- rejects only a faction controlling itself, so the code that changes
+		-- control checks the rest. A faction has both a race and a home world
+		-- or neither, and the composite foreign key makes them agree; neither
+		-- changes once set. A seat's first faction is its empire: a seat has
+		-- at most one, and an empire always has a home world. Names follow
+		-- internal/names.
+		CREATE TABLE factions (
+			id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+			name                   TEXT    NOT NULL DEFAULT 'Unnamed Faction'
+				CHECK (length(name) BETWEEN 1 AND 25
+					AND name NOT GLOB '*[^ -~]*'
+					AND instr(name, '"') = 0
+					AND instr(name, '\') = 0
+					AND name = trim(name, ' ')
+					AND instr(name, '  ') = 0),
+			race_id                INTEGER,
+			home_planet_id         INTEGER,
+			is_empire              INTEGER NOT NULL DEFAULT 0 CHECK (is_empire IN (0, 1)),
+			seat_id                INTEGER REFERENCES seats (id),
+			controlling_faction_id INTEGER REFERENCES factions (id),
+			created_at             INTEGER NOT NULL,
+			FOREIGN KEY (race_id, home_planet_id) REFERENCES races (id, planet_id),
+			CHECK ((race_id IS NULL) = (home_planet_id IS NULL)),
+			CHECK ((seat_id IS NULL) <> (controlling_faction_id IS NULL)),
+			CHECK (controlling_faction_id <> id),
+			CHECK (is_empire = 0 OR (seat_id IS NOT NULL AND home_planet_id IS NOT NULL))
+		) STRICT;
+
+		CREATE UNIQUE INDEX factions_seat_empire ON factions (seat_id) WHERE is_empire = 1;
+		CREATE INDEX factions_home_planet_id ON factions (home_planet_id);
+		CREATE INDEX factions_controlling_faction_id ON factions (controlling_faction_id);
+
+		CREATE TRIGGER factions_home_is_fixed
+		BEFORE UPDATE OF race_id, home_planet_id ON factions
+		WHEN OLD.race_id IS NOT NEW.race_id OR OLD.home_planet_id IS NOT NEW.home_planet_id
+		BEGIN
+			SELECT RAISE(ABORT, 'a faction''s race and home world cannot change');
+		END;`,
 	},
 }

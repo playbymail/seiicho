@@ -6,8 +6,8 @@ Status: **approved and implemented** in `homeworlds.go` (`HomeWorld` and
 `RaiseHomeDeposits`, drawn from the `prng.HomeWorlds` source).
 
 A seat can start the game only on a planet that has been flagged as a home
-world. Assigning seats to home worlds is a later, separate command. It is not
-designed here. This document covers the step before it: finding planets
+world. Assigning seats to home worlds is a separate command, designed in
+`internal/store/seat-assignment.md`. This document covers the step before it: finding planets
 suited to be home worlds, flagging them, and making them better places to
 start.
 

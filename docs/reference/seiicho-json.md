@@ -1,8 +1,8 @@
 # seiicho JSON output
 
 With `--json`, the `seiicho` `list` commands print a JSON array of objects, `[]`
-when there is nothing to list, and the `show`, `summarize`, and
-`flag-home-world` commands print a single object. The
+when there is nothing to list, and the `show`, `summarize`,
+`flag-home-world`, and `assign-seat` commands print a single object. The
 output is indented and ends with a newline. Times are RFC 3339 strings in UTC,
 such as `"2026-10-22T15:04:05Z"`. Password hashes are never included.
 
@@ -42,6 +42,9 @@ Printed by `list-seats`, which includes inactive seats.
 | `is_gm` | boolean | Whether it is a gamemaster seat; otherwise a player seat |
 | `is_active` | boolean | Whether the seat is active |
 | `created_at` | string | When the seat was created |
+| `empire_id` | number or null | Faction ID of the seat's empire; `null` if it has none |
+| `empire_name` | string or null | Name of the seat's empire; `null` if it has none |
+| `home_planet_id` | number or null | Planet ID of the empire's home world; `null` if the seat has no empire |
 
 ## Home world
 
@@ -177,3 +180,21 @@ has these fields:
 | `stars` | number | Number of stars with that many planets |
 | `average_per_star` | number | Mean wealth of those stars |
 | `average_per_planet` | number | Mean wealth of their planets |
+
+## Empire
+
+Printed by `assign-seat`.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `game_id` | number | Game ID |
+| `seat_id` | number | ID of the seat assigned |
+| `faction_id` | number | Faction ID of the new empire |
+| `name` | string | Name of the empire |
+| `race_id` | number | ID of the race of the empire's home world |
+| `planet_id` | number | Planet ID of the empire's home world |
+| `x` | number | x coordinate of the home world's star system |
+| `y` | number | y coordinate of the home world's star system |
+| `z` | number | z coordinate of the home world's star system |
+| `star` | string | Letter of the home world's star within its system, from `A` |
+| `orbit` | number | The home world's orbit, from 1 |
