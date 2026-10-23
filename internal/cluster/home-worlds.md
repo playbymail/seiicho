@@ -2,7 +2,7 @@
 
 How the engine picks the planets that players can start on.
 
-Status: **draft, not approved.** See [Open questions](#open-questions).
+Status: **draft, not approved.**
 
 A seat can start the game only on a planet that has been flagged as a home
 world. Assigning seats to home worlds is a later, separate command. It is not
@@ -241,12 +241,9 @@ cannot have more than 34 home worlds at any setting.
   (0,0,0)–(1,1,1) is 2.
 - Parameters outside their ranges are rejected.
 
-## Open questions
+## Rebuilding a game
 
-1. **Recording the runs.** Keying the source by the parameters and `n` makes
-   each run reproducible, but only by someone who knows what parameters every
-   earlier run used. The database does not record them, so a game rebuilt
-   from its seed cannot get its home worlds back. Seats have the same
-   property: the database, not the seed, is their record. Should each home
-   world store the parameters it was flagged with, or is the database
-   enough?
+The database is the record of a game's home worlds, as it is of its seats.
+Runs do not store their parameters. A game rebuilt from its seed gets its
+home worlds back only if the gamemaster runs `flag-home-world` again with the
+same parameters, in the same order.
