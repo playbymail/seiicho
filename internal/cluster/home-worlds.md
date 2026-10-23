@@ -87,15 +87,16 @@ same input however the stars were read from the database.
 The shuffle draws from a new child source:
 
 ```go
-root.Child(prng.HomeWorlds, prng.Node(minHome), prng.Node(maxNeighbor), prng.Node(n))
+root.Child(prng.HomeWorlds)
 ```
 
-where `minHome` and `maxNeighbor` are the run's parameters and `n` is the
-number of home worlds already flagged in the game, the count of planets with
-`is_homeworld = 1`. Each run gets its own source, and running the same
-commands with the same parameters, in the same order, on the same game flags
-the same planets. Step 4 draws its yield rolls from the same source, after
-the shuffle.
+Every run starts the source afresh, so a run's result depends only on the
+game's current home worlds and the run's parameters. A failed run changes
+nothing, so the gamemaster can retry with looser parameters to fit one more
+player, and the retry draws exactly as if it were the first attempt. Running
+the same successful commands with the same parameters, in the same order, on
+the same game flags the same planets. Step 4 draws its yield rolls from the
+same source, after the shuffle.
 
 ## Step 3: Draw
 
@@ -131,7 +132,7 @@ The command prints the planet it flagged and exits with status 0.
 
 | Node         | Value | Draws                                                   |
 | ------------ | ----: | ------------------------------------------------------- |
-| `HomeWorlds` |     8 | Per run, from the child keyed by the parameters and `n`: Step 2's shuffle, then one roll per deposit in Step 4 |
+| `HomeWorlds` |     8 | Per run, from a fresh source: Step 2's shuffle, then one roll per deposit in Step 4 |
 
 Like the other nodes, the value is permanent. Home worlds do not use any
 cluster source, so flagging them never changes the stars, planets, or
@@ -230,8 +231,8 @@ cannot have more than 34 home worlds at any setting.
 - The update sets habitability to 25, raises every yield by 1 to 10 points
   and every quantity by 25%, clamps yields at 75 (tested with a yield set by
   hand above 65), and leaves everything else alone.
-- The parameters change the shuffle: the same game and `n` with different
-  parameters draw from different sources.
+- A failed run leaves no trace: a run after it gives the same result as the
+  same run without the failure.
 - The schema rejects habitability 25 without `is_homeworld`, and the
   reverse.
 - The same game, parameters, and run order give the same home worlds; the
@@ -246,4 +247,4 @@ cannot have more than 34 home worlds at any setting.
 The database is the record of a game's home worlds, as it is of its seats.
 Runs do not store their parameters. A game rebuilt from its seed gets its
 home worlds back only if the gamemaster runs `flag-home-world` again with the
-same parameters, in the same order.
+same parameters, in the same order. Only the successful runs matter.
