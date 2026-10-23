@@ -4,6 +4,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"slices"
 
@@ -26,22 +27,25 @@ type ClusterOptions struct {
 	SortPlanets bool
 }
 
-// GenerateCluster generates a game's cluster and its planets from the game's
-// seeds and stores them, returning them in the order stored; each planet's
-// Star indexes the returned stars. The game must exist and be active;
+// GenerateCluster generates a game's cluster, its planets, and their
+// deposits from the game's seeds and stores them, returning them in the
+// order stored; each planet's Star indexes the returned stars, and each
+// deposit's Planet the returned planets. Deposits are stored grouped by
+// planet, in the planets' order, so that their IDs reveal no more than the
+// planets' IDs do. The game must exist and be active;
 // otherwise it returns ErrGameNotFound or ErrGameInactive. It returns
 // ErrClusterExists if the game already has stars. On error, it stores
 // nothing.
-func (s *Store) GenerateCluster(ctx context.Context, gameID int64, opts ClusterOptions) (stars []cluster.Star, planets []cluster.Planet, err error) {
+func (s *Store) GenerateCluster(ctx context.Context, gameID int64, opts ClusterOptions) (stars []cluster.Star, planets []cluster.Planet, deposits []cluster.Deposit, err error) {
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer s.pool.Put(conn)
 
 	end, err := sqlitex.ImmediateTransaction(conn)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	defer end(&err)
 
@@ -60,15 +64,15 @@ func (s *Store) GenerateCluster(ctx context.Context, gameID int64, opts ClusterO
 			},
 		})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	switch {
 	case !found:
-		return nil, nil, ErrGameNotFound
+		return nil, nil, nil, ErrGameNotFound
 	case !active:
-		return nil, nil, ErrGameInactive
+		return nil, nil, nil, ErrGameInactive
 	case hasStars:
-		return nil, nil, ErrClusterExists
+		return nil, nil, nil, ErrClusterExists
 	}
 
 	root := prng.New(seed1, seed2)
@@ -82,7 +86,7 @@ func (s *Store) GenerateCluster(ctx context.Context, gameID int64, opts ClusterO
 			`INSERT INTO stars (game_id, x, y, z, seq) VALUES (?, ?, ?, ?, ?);`,
 			&sqlitex.ExecOptions{Args: []any{gameID, st.X, st.Y, st.Z, st.Seq}})
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		starIDs[i] = conn.LastInsertRowID()
 	}
@@ -91,15 +95,30 @@ func (s *Store) GenerateCluster(ctx context.Context, gameID int64, opts ClusterO
 	if opts.SortPlanets {
 		cluster.SortPlanets(stars, planets)
 	}
-	for _, p := range planets {
+	planetIDs := make([]int64, len(planets))
+	for i, p := range planets {
 		err = sqlitex.Execute(conn,
 			`INSERT INTO planets (star_id, orbit, kind, habitability) VALUES (?, ?, ?, ?);`,
 			&sqlitex.ExecOptions{Args: []any{starIDs[p.Star], p.Orbit, p.Kind, p.Habitability}})
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
+		}
+		planetIDs[i] = conn.LastInsertRowID()
+	}
+
+	deposits = cluster.Deposits(stars, planets, root.Child(prng.ResourceBudgets).PRNG(), root.Child(prng.Deposits).PRNG(), root.Child(prng.DepositYields).PRNG())
+	// Deposits come by star; a stable sort groups them by planet and keeps
+	// each planet's in number order.
+	slices.SortStableFunc(deposits, func(a, b cluster.Deposit) int { return cmp.Compare(a.Planet, b.Planet) })
+	for _, d := range deposits {
+		err = sqlitex.Execute(conn,
+			`INSERT INTO deposits (planet_id, no, resource, quantity, yield_pct) VALUES (?, ?, ?, ?, ?);`,
+			&sqlitex.ExecOptions{Args: []any{planetIDs[d.Planet], d.No, d.Resource, d.Quantity, d.Yield}})
+		if err != nil {
+			return nil, nil, nil, err
 		}
 	}
-	return stars, planets, nil
+	return stars, planets, deposits, nil
 }
 
 // Bin is one bar of a histogram: Count stars or systems have Planets planets.

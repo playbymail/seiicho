@@ -52,18 +52,18 @@ func TestGenerateCluster(t *testing.T) {
 		{"missing game", 999, store.ErrGameNotFound},
 		{"inactive game", closed.ID, store.ErrGameInactive},
 	} {
-		if _, _, err := s.GenerateCluster(t.Context(), tc.gameID, store.ClusterOptions{}); !errors.Is(err, tc.want) {
+		if _, _, _, err := s.GenerateCluster(t.Context(), tc.gameID, store.ClusterOptions{}); !errors.Is(err, tc.want) {
 			t.Errorf("GenerateCluster, %s = %v, want %v", tc.name, err, tc.want)
 		}
 	}
 
-	var total int
+	var total, totalDeposits int
 	for _, opts := range []store.ClusterOptions{{}, {SortStars: true}, {SortPlanets: true}, {SortStars: true, SortPlanets: true}} {
 		g, err := s.CreateGame(t.Context(), seed1, seed2, now)
 		if err != nil {
 			t.Fatal(err)
 		}
-		stars, planets, err := s.GenerateCluster(t.Context(), g.ID, opts)
+		stars, planets, deposits, err := s.GenerateCluster(t.Context(), g.ID, opts)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -82,11 +82,17 @@ func TestGenerateCluster(t *testing.T) {
 		if fmt.Sprint(planets) != fmt.Sprint(wantPlanets) {
 			t.Errorf("%+v: GenerateCluster did not draw from the game's planet sources", opts)
 		}
+		wantDeposits := cluster.Deposits(want, wantPlanets, root.Child(prng.ResourceBudgets).PRNG(), root.Child(prng.Deposits).PRNG(), root.Child(prng.DepositYields).PRNG())
+		if len(deposits) != len(wantDeposits) {
+			t.Errorf("%+v: GenerateCluster returned %d deposits, want %d", opts, len(deposits), len(wantDeposits))
+		}
 		total += len(planets)
+		totalDeposits += len(deposits)
 
 		// Rows are stored in the order returned.
 		var stored []cluster.Star
-		var storedPlanets []string
+		var storedPlanets, storedDeposits []string
+		var depositPlanets []int64
 		withConn(t, s, func(conn *sqlite.Conn) {
 			err := sqlitex.Execute(conn, `SELECT x, y, z, seq FROM stars WHERE game_id = ? ORDER BY id;`, &sqlitex.ExecOptions{
 				Args: []any{g.ID},
@@ -116,6 +122,23 @@ func TestGenerateCluster(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			err = sqlitex.Execute(conn,
+				`SELECT p.id, s.x, s.y, s.z, s.seq, p.orbit, d.no, d.resource, d.quantity, d.yield_pct
+				 FROM deposits d JOIN planets p ON p.id = d.planet_id JOIN stars s ON s.id = p.star_id
+				 WHERE s.game_id = ? ORDER BY d.id;`,
+				&sqlitex.ExecOptions{
+					Args: []any{g.ID},
+					ResultFunc: func(stmt *sqlite.Stmt) error {
+						depositPlanets = append(depositPlanets, stmt.ColumnInt64(0))
+						storedDeposits = append(storedDeposits, fmt.Sprint(
+							stmt.ColumnInt(1), stmt.ColumnInt(2), stmt.ColumnInt(3), stmt.ColumnText(4), stmt.ColumnInt(5),
+							stmt.ColumnInt(6), stmt.ColumnText(7), stmt.ColumnInt64(8), stmt.ColumnInt(9)))
+						return nil
+					},
+				})
+			if err != nil {
+				t.Fatal(err)
+			}
 		})
 		if fmt.Sprint(stored) != fmt.Sprint(want) {
 			t.Errorf("%+v: stored %d stars that differ from the %d generated", opts, len(stored), len(want))
@@ -129,7 +152,45 @@ func TestGenerateCluster(t *testing.T) {
 			t.Errorf("%+v: stored %d planets that differ from the %d generated", opts, len(storedPlanets), len(generated))
 		}
 
-		if _, _, err := s.GenerateCluster(t.Context(), g.ID, opts); !errors.Is(err, store.ErrClusterExists) {
+		// Deposits are stored grouped by planet in the planets' stored
+		// order, so their IDs reveal no more than the planets' IDs, and
+		// they match the returned deposits, which match those generated.
+		if !slices.IsSorted(depositPlanets) {
+			t.Errorf("%+v: deposits are not stored grouped by planet in planet ID order", opts)
+		}
+		var returned []string
+		for _, d := range deposits {
+			p := planets[d.Planet]
+			st := stars[p.Star]
+			returned = append(returned, fmt.Sprint(st.X, st.Y, st.Z, st.Seq, p.Orbit, d.No, d.Resource, d.Quantity, d.Yield))
+		}
+		if fmt.Sprint(storedDeposits) != fmt.Sprint(returned) {
+			t.Errorf("%+v: stored %d deposits that differ from the %d returned", opts, len(storedDeposits), len(returned))
+		}
+		var generatedDeposits []string
+		for _, d := range wantDeposits {
+			p := wantPlanets[d.Planet]
+			st := want[p.Star]
+			generatedDeposits = append(generatedDeposits, fmt.Sprint(st.X, st.Y, st.Z, st.Seq, p.Orbit, d.No, d.Resource, d.Quantity, d.Yield))
+		}
+		slices.Sort(returned)
+		slices.Sort(generatedDeposits)
+		if fmt.Sprint(returned) != fmt.Sprint(generatedDeposits) {
+			t.Errorf("%+v: GenerateCluster did not draw from the game's deposit sources", opts)
+		}
+
+		// Each star's deposits add up to its budget, recomputed from the
+		// game's seed.
+		budgets := cluster.Budgets(stars, root.Child(prng.ResourceBudgets).PRNG())
+		sums := make([]int64, len(stars))
+		for _, d := range deposits {
+			sums[planets[d.Planet].Star] += d.Quantity
+		}
+		if !slices.Equal(sums, budgets) {
+			t.Errorf("%+v: the stars' deposits do not add up to their budgets", opts)
+		}
+
+		if _, _, _, err := s.GenerateCluster(t.Context(), g.ID, opts); !errors.Is(err, store.ErrClusterExists) {
 			t.Errorf("%+v: GenerateCluster again = %v, want ErrClusterExists", opts, err)
 		}
 	}
@@ -139,6 +200,9 @@ func TestGenerateCluster(t *testing.T) {
 		}
 		if n := count(t, conn, `SELECT count(*) FROM planets;`); n != total {
 			t.Errorf("%d planets, want %d (the failed attempts must add nothing)", n, total)
+		}
+		if n := count(t, conn, `SELECT count(*) FROM deposits;`); n != totalDeposits {
+			t.Errorf("%d deposits, want %d (the failed attempts must add nothing)", n, totalDeposits)
 		}
 	})
 }
@@ -223,6 +287,44 @@ func TestPlanets(t *testing.T) {
 	}
 }
 
+func TestDeposits(t *testing.T) {
+	s, err := store.OpenPrivateMemory(t.Context(), memoryName(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	conn, err := s.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Put(conn)
+	game := mustExec(t, conn, `INSERT INTO games (seed1, seed2, created_at) VALUES (1, 2, 1);`)
+	star := mustExec(t, conn, `INSERT INTO stars (game_id, x, y, z, seq) VALUES (?, 0, 0, 0, 'A');`, game)
+	planet := mustExec(t, conn, `INSERT INTO planets (star_id, orbit, kind) VALUES (?, 1, 'rocky');`, star)
+
+	const insert = `INSERT INTO deposits (planet_id, no, resource, quantity, yield_pct) VALUES (?, ?, ?, ?, ?);`
+	mustExec(t, conn, insert, planet, 1, "gold", 99999, 1)
+	mustExec(t, conn, insert, planet, 45, "nmts", int64(4_692_000_000), 25)
+	if err := exec(t, conn, insert, planet, 1, "fuel", 99999, 1); sqlite.ErrCode(err) != sqlite.ResultConstraintUnique {
+		t.Errorf("duplicate deposit number = %v, want a unique constraint error", err)
+	}
+	for _, args := range [][]any{
+		{planet, 0, "fuel", 99999, 1}, {planet, 46, "fuel", 99999, 1},
+		{planet, 2, "Fuel", 99999, 1}, {planet, 2, "metals", 99999, 1},
+		{planet, 2, "fuel", 99998, 1}, {planet, 2, "fuel", 99999, 0}, {planet, 2, "fuel", 99999, 26},
+	} {
+		if err := exec(t, conn, insert, args...); sqlite.ErrCode(err) != sqlite.ResultConstraintCheck {
+			t.Errorf("deposit %v = %v, want a check constraint error", args[1:], err)
+		}
+	}
+	if err := exec(t, conn, insert, planet+1, 2, "fuel", 99999, 1); sqlite.ErrCode(err) != sqlite.ResultConstraintForeignKey {
+		t.Errorf("deposit on a missing planet = %v, want a foreign key error", err)
+	}
+	if err := exec(t, conn, insert, planet, 2, "fuel", nil, 1); sqlite.ErrCode(err) != sqlite.ResultConstraintNotNull {
+		t.Errorf("deposit without a quantity = %v, want a not null constraint error", err)
+	}
+}
+
 func TestPlanetsByKind(t *testing.T) {
 	s, err := store.OpenPrivateMemory(t.Context(), memoryName(t))
 	if err != nil {
@@ -243,7 +345,7 @@ func TestPlanetsByKind(t *testing.T) {
 	if got, err := s.PlanetsByKind(t.Context(), g.ID); err != nil || len(got) != 0 {
 		t.Errorf("PlanetsByKind without a cluster = %v, %v; want no summaries", got, err)
 	}
-	_, planets, err := s.GenerateCluster(t.Context(), g.ID, store.ClusterOptions{})
+	_, planets, _, err := s.GenerateCluster(t.Context(), g.ID, store.ClusterOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +354,7 @@ func TestPlanetsByKind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.GenerateCluster(t.Context(), other.ID, store.ClusterOptions{}); err != nil {
+	if _, _, _, err := s.GenerateCluster(t.Context(), other.ID, store.ClusterOptions{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -316,7 +418,7 @@ func TestPlanetHistograms(t *testing.T) {
 	if bins, err := s.PlanetsPerStar(t.Context(), g.ID); err != nil || len(bins) != 0 {
 		t.Errorf("PlanetsPerStar without a cluster = %v, %v; want no bins", bins, err)
 	}
-	stars, planets, err := s.GenerateCluster(t.Context(), g.ID, store.ClusterOptions{})
+	stars, planets, _, err := s.GenerateCluster(t.Context(), g.ID, store.ClusterOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,7 +1,8 @@
 # How to generate a game's cluster
 
 A game's board is its cluster: 100 star systems in a cube of coordinates from
-0 to 30 on each axis, and the planets that orbit their stars. Generate it once
+0 to 30 on each axis, the planets that orbit their stars, and the planets'
+resource deposits. Generate it once
 with `seiicho generate-cluster`.
 
 ## Before you begin
@@ -19,7 +20,7 @@ go run ./cmd/seiicho generate-cluster --env development --db tmp/seiicho.db --ga
 ```
 
 ```text
-generated a cluster of 159 stars and 721 planets for game 1
+generated a cluster of 159 stars, 721 planets, and 12895 deposits for game 1
 ```
 
 If you leave out `--env` or `--db`, the command uses `SEIICHO_ENV` or
@@ -39,6 +40,14 @@ giants.
 Each planet also has a habitability. Rocky planets range from 0 to 24 and
 giants from 0 to 15, with values near the middle of each range most common.
 Asteroid belts are always 0.
+
+Each planet has from 1 to 30 resource deposits if it is rocky, 1 to 35 if it
+is a giant, and 1 to 45 if it is an asteroid belt, with counts near the middle
+of each range most common. A deposit holds gold, fuel, metals, or non-metals;
+giants never hold gold. Every star's deposits add up to about the same wealth,
+so a star with few planets has rich planets. Each deposit also has a yield
+from 1% to 25%; gold yields at most 3%, and fuel on rocky planets at most
+15%. The number of deposits depends on the seed.
 
 ## Check how the planets are spread
 
@@ -94,8 +103,10 @@ were allocated, turn the sorts off:
 go run ./cmd/seiicho generate-cluster --env development --db tmp/seiicho.db --game 1 --sort-stars=false --sort-planets=false
 ```
 
-The flags change only the order of the rows and their IDs, not the cluster or
-its planets.
+The flags change only the order of the rows and their IDs, not the cluster,
+its planets, or their deposits. Deposits are always stored grouped by planet,
+in the order the planets are stored, so their IDs reveal no more than the
+planets' IDs do.
 
 ## If the command fails
 

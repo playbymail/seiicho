@@ -52,6 +52,15 @@ const (
 	PlanetKinds Node = 3
 	// Habitability is the source of a cluster's planets' habitability.
 	Habitability Node = 4
+	// ResourceBudgets is the source of each star's resource budget: one
+	// roll per star.
+	ResourceBudgets Node = 5
+	// Deposits is the source of a cluster's deposits: per planet, a count;
+	// per deposit, a resource and a weight.
+	Deposits Node = 6
+	// DepositYields is the source of a cluster's deposits' yields: one roll
+	// per deposit.
+	DepositYields Node = 7
 )
 
 // Source is a node in a tree of deterministic random sources. The zero value

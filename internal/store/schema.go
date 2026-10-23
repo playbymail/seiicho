@@ -86,5 +86,18 @@ var schema = sqlitemigration.Schema{
 		// generator draws at most 24; 25 is reserved for home worlds.
 		`ALTER TABLE planets ADD COLUMN
 			habitability INTEGER NOT NULL DEFAULT 0 CHECK (habitability BETWEEN 0 AND 25);`,
+
+		// A deposit of one resource on a planet. no numbers a planet's deposits
+		// from 1 in creation order. A star's deposits add up to its budget,
+		// which is recomputed from the game's seed rather than stored.
+		`CREATE TABLE deposits (
+			id        INTEGER PRIMARY KEY AUTOINCREMENT,
+			planet_id INTEGER NOT NULL REFERENCES planets (id),
+			no        INTEGER NOT NULL CHECK (no BETWEEN 1 AND 45),
+			resource  TEXT    NOT NULL CHECK (resource IN ('gold', 'fuel', 'mets', 'nmts')),
+			quantity  INTEGER NOT NULL CHECK (quantity >= 99999),
+			yield_pct INTEGER NOT NULL CHECK (yield_pct BETWEEN 1 AND 25),
+			UNIQUE (planet_id, no)
+		) STRICT;`,
 	},
 }
