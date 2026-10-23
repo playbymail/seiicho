@@ -144,8 +144,7 @@ source, `prng.Habitability`. Asteroid belts draw nothing.
 ### Storage
 
 The `planets` table stores habitability as
-`INTEGER NOT NULL DEFAULT 0 CHECK (habitability BETWEEN 0 AND 25)`, added by
-migration 2. Planets generated before migration 2 have habitability 0.
+`INTEGER NOT NULL DEFAULT 0 CHECK (habitability BETWEEN 0 AND 25)`.
 
 The check allows 25, but the generator never draws it: rocky planets top out
 at 24. Habitability 25 is reserved for players' home worlds, which a later,
@@ -419,7 +418,7 @@ Budgets are never affected.
 
 ### Storage
 
-Migration 3 adds one table:
+The schema has one table for deposits:
 
 ```sql
 -- A deposit of one resource on a planet. no numbers a planet's deposits

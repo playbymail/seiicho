@@ -73,24 +73,22 @@ var schema = sqlitemigration.Schema{
 
 		-- A planet circles a star in an orbit from 1 to 10. The generator fills
 		-- each star's orbits from 1 without gaps. The unique key also serves
-		-- lookups by star_id.
+		-- lookups by star_id. Habitability runs from 0 to 25; asteroids are
+		-- always 0. The cluster generator draws at most 24; 25 is reserved for
+		-- home worlds.
 		CREATE TABLE planets (
-			id      INTEGER PRIMARY KEY AUTOINCREMENT,
-			star_id INTEGER NOT NULL REFERENCES stars (id),
-			orbit   INTEGER NOT NULL CHECK (orbit BETWEEN 1 AND 10),
-			kind    TEXT    NOT NULL CHECK (kind IN ('rocky', 'asteroids', 'giant')),
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			star_id      INTEGER NOT NULL REFERENCES stars (id),
+			orbit        INTEGER NOT NULL CHECK (orbit BETWEEN 1 AND 10),
+			kind         TEXT    NOT NULL CHECK (kind IN ('rocky', 'asteroids', 'giant')),
+			habitability INTEGER NOT NULL DEFAULT 0 CHECK (habitability BETWEEN 0 AND 25),
 			UNIQUE (star_id, orbit)
-		) STRICT;`,
+		) STRICT;
 
-		// Habitability runs from 0 to 25; asteroids are always 0. The cluster
-		// generator draws at most 24; 25 is reserved for home worlds.
-		`ALTER TABLE planets ADD COLUMN
-			habitability INTEGER NOT NULL DEFAULT 0 CHECK (habitability BETWEEN 0 AND 25);`,
-
-		// A deposit of one resource on a planet. no numbers a planet's deposits
-		// from 1 in creation order. A star's deposits add up to its budget,
-		// which is recomputed from the game's seed rather than stored.
-		`CREATE TABLE deposits (
+		-- A deposit of one resource on a planet. no numbers a planet's deposits
+		-- from 1 in creation order. A star's deposits add up to its budget,
+		-- which is recomputed from the game's seed rather than stored.
+		CREATE TABLE deposits (
 			id        INTEGER PRIMARY KEY AUTOINCREMENT,
 			planet_id INTEGER NOT NULL REFERENCES planets (id),
 			no        INTEGER NOT NULL CHECK (no BETWEEN 1 AND 45),

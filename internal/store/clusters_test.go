@@ -714,7 +714,7 @@ func TestDepositHistograms(t *testing.T) {
 
 // checkEmpty checks that the deposit reports find no game 999, and nothing
 // for a game without a cluster or for one whose cluster has no deposits,
-// as a game generated before migration 3 has.
+// as a game whose deposits were never generated has.
 func checkEmpty(t *testing.T, s *store.Store) {
 	t.Helper()
 	g, err := s.CreateGame(t.Context(), 5, 6, time.Unix(1_800_000_000, 0))

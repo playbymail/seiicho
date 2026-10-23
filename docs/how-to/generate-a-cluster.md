@@ -119,8 +119,7 @@ size on a logarithmic scale, `--deposit-yield` by yield, and
 these histograms are scaled so that the longest has 50 `#`s.
 
 Add `--json` to either command for the output described in
-[seiicho JSON output](../reference/seiicho-json.md). A game generated before
-deposits were added has none, and these reports print only their headers.
+[seiicho JSON output](../reference/seiicho-json.md).
 
 ## Choose the order rows are stored in
 
