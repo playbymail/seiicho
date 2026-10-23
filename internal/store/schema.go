@@ -75,26 +75,31 @@ var schema = sqlitemigration.Schema{
 		-- each star's orbits from 1 without gaps. The unique key also serves
 		-- lookups by star_id. Habitability runs from 0 to 25; asteroids are
 		-- always 0. The cluster generator draws at most 24; 25 is reserved for
-		-- home worlds.
+		-- home worlds. A home world always has habitability 25, and no other
+		-- planet does.
 		CREATE TABLE planets (
 			id           INTEGER PRIMARY KEY AUTOINCREMENT,
 			star_id      INTEGER NOT NULL REFERENCES stars (id),
 			orbit        INTEGER NOT NULL CHECK (orbit BETWEEN 1 AND 10),
 			kind         TEXT    NOT NULL CHECK (kind IN ('rocky', 'asteroids', 'giant')),
 			habitability INTEGER NOT NULL DEFAULT 0 CHECK (habitability BETWEEN 0 AND 25),
-			UNIQUE (star_id, orbit)
+			is_homeworld INTEGER NOT NULL DEFAULT 0 CHECK (is_homeworld IN (0, 1)),
+			UNIQUE (star_id, orbit),
+			CHECK ((is_homeworld = 1) = (habitability = 25))
 		) STRICT;
 
 		-- A deposit of one resource on a planet. no numbers a planet's deposits
-		-- from 1 in creation order. A star's deposits add up to its budget,
-		-- which is recomputed from the game's seed rather than stored.
+		-- from 1 in creation order. The deposits of a star that is not a home
+		-- star add up to its budget, which is recomputed from the game's seed
+		-- rather than stored. The generator draws yields of at most 25; home
+		-- worlds raise them to at most 75.
 		CREATE TABLE deposits (
 			id        INTEGER PRIMARY KEY AUTOINCREMENT,
 			planet_id INTEGER NOT NULL REFERENCES planets (id),
 			no        INTEGER NOT NULL CHECK (no BETWEEN 1 AND 45),
 			resource  TEXT    NOT NULL CHECK (resource IN ('gold', 'fuel', 'mets', 'nmts')),
 			quantity  INTEGER NOT NULL CHECK (quantity >= 99999),
-			yield_pct INTEGER NOT NULL CHECK (yield_pct BETWEEN 1 AND 25),
+			yield_pct INTEGER NOT NULL CHECK (yield_pct BETWEEN 1 AND 75),
 			UNIQUE (planet_id, no)
 		) STRICT;`,
 	},

@@ -77,8 +77,9 @@
 // to the next such bound, each row labeled with its lower bound, such as
 // 2M; the 100K bin starts at the smallest deposit, 99,999. The bins run from
 // the smallest deposit's to the largest's. Yields have one row per
-// percentage from 1 to 25, and deposits per planet one row per number from 1
-// to 45, including those with a count of 0. A game with no cluster, or
+// percentage from 1 to 25, or to the highest yield if a home world's is
+// higher, and deposits per planet one row per number from 1 to 45, including
+// those with a count of 0. A game with no cluster, or
 // whose cluster has no deposits, has no rows. It fails if there is no such
 // game.
 //

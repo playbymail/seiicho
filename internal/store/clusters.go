@@ -121,6 +121,140 @@ func (s *Store) GenerateCluster(ctx context.Context, gameID int64, opts ClusterO
 	return stars, planets, deposits, nil
 }
 
+// HomeWorld is a planet flagged as a home world: its ID, its system's
+// coordinates, its star's letter, and its orbit.
+type HomeWorld struct {
+	PlanetID int64
+	X, Y, Z  int
+	Seq      string
+	Orbit    int
+}
+
+// FlagHomeWorld flags the next home world of a game, as cluster.HomeWorld
+// chooses it with minHome and maxNeighbor, drawing from a fresh
+// prng.HomeWorlds source. It sets the planet's habitability to 25 and
+// raises its deposits with cluster.RaiseHomeDeposits, drawing from the same
+// source, and returns the planet. The game must exist, be active, and have a
+// cluster; otherwise it returns ErrGameNotFound, ErrGameInactive, or
+// ErrNoCluster. It returns cluster.ErrNoHomeWorld if no planet qualifies. On
+// error, it changes nothing. It panics if minHome or maxNeighbor is outside
+// its range.
+func (s *Store) FlagHomeWorld(ctx context.Context, gameID int64, minHome, maxNeighbor int) (home HomeWorld, err error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return HomeWorld{}, err
+	}
+	defer s.pool.Put(conn)
+
+	end, err := sqlitex.ImmediateTransaction(conn)
+	if err != nil {
+		return HomeWorld{}, err
+	}
+	defer end(&err)
+
+	found, active, hasStars := false, false, false
+	var seed1, seed2 uint64
+	err = sqlitex.Execute(conn,
+		`SELECT is_active, seed1, seed2, EXISTS (SELECT 1 FROM stars WHERE game_id = g.id)
+		 FROM games g WHERE id = ?;`,
+		&sqlitex.ExecOptions{
+			Args: []any{gameID},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				found, active = true, stmt.ColumnBool(0)
+				seed1, seed2 = uint64(stmt.ColumnInt64(1)), uint64(stmt.ColumnInt64(2))
+				hasStars = stmt.ColumnBool(3)
+				return nil
+			},
+		})
+	if err != nil {
+		return HomeWorld{}, err
+	}
+	switch {
+	case !found:
+		return HomeWorld{}, ErrGameNotFound
+	case !active:
+		return HomeWorld{}, ErrGameInactive
+	case !hasStars:
+		return HomeWorld{}, ErrNoCluster
+	}
+
+	var stars []cluster.Star
+	starIndex := map[int64]int{}
+	err = sqlitex.Execute(conn, `SELECT id, x, y, z, seq FROM stars WHERE game_id = ?;`, &sqlitex.ExecOptions{
+		Args: []any{gameID},
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			starIndex[stmt.ColumnInt64(0)] = len(stars)
+			stars = append(stars, cluster.Star{X: stmt.ColumnInt(1), Y: stmt.ColumnInt(2), Z: stmt.ColumnInt(3), Seq: stmt.ColumnText(4)})
+			return nil
+		},
+	})
+	if err != nil {
+		return HomeWorld{}, err
+	}
+	var planets []cluster.Planet
+	var planetIDs []int64
+	var homes []int
+	err = sqlitex.Execute(conn,
+		`SELECT p.id, p.star_id, p.orbit, p.kind, p.habitability, p.is_homeworld
+		 FROM planets p JOIN stars s ON s.id = p.star_id WHERE s.game_id = ?;`,
+		&sqlitex.ExecOptions{
+			Args: []any{gameID},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				if stmt.ColumnBool(5) {
+					homes = append(homes, len(planets))
+				}
+				planetIDs = append(planetIDs, stmt.ColumnInt64(0))
+				planets = append(planets, cluster.Planet{
+					Star: starIndex[stmt.ColumnInt64(1)], Orbit: stmt.ColumnInt(2), Kind: stmt.ColumnText(3), Habitability: stmt.ColumnInt(4),
+				})
+				return nil
+			},
+		})
+	if err != nil {
+		return HomeWorld{}, err
+	}
+
+	p := prng.New(seed1, seed2).Child(prng.HomeWorlds).PRNG()
+	j, err := cluster.HomeWorld(stars, planets, homes, minHome, maxNeighbor, p)
+	if err != nil {
+		return HomeWorld{}, err
+	}
+
+	var deposits []cluster.Deposit
+	var depositIDs []int64
+	err = sqlitex.Execute(conn,
+		`SELECT id, no, resource, quantity, yield_pct FROM deposits WHERE planet_id = ? ORDER BY no;`,
+		&sqlitex.ExecOptions{
+			Args: []any{planetIDs[j]},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				depositIDs = append(depositIDs, stmt.ColumnInt64(0))
+				deposits = append(deposits, cluster.Deposit{
+					Planet: j, No: stmt.ColumnInt(1), Resource: stmt.ColumnText(2), Quantity: stmt.ColumnInt64(3), Yield: stmt.ColumnInt(4),
+				})
+				return nil
+			},
+		})
+	if err != nil {
+		return HomeWorld{}, err
+	}
+	cluster.RaiseHomeDeposits(deposits, p)
+
+	err = sqlitex.Execute(conn, `UPDATE planets SET is_homeworld = 1, habitability = 25 WHERE id = ?;`,
+		&sqlitex.ExecOptions{Args: []any{planetIDs[j]}})
+	if err != nil {
+		return HomeWorld{}, err
+	}
+	for k, d := range deposits {
+		err = sqlitex.Execute(conn, `UPDATE deposits SET quantity = ?, yield_pct = ? WHERE id = ?;`,
+			&sqlitex.ExecOptions{Args: []any{d.Quantity, d.Yield, depositIDs[k]}})
+		if err != nil {
+			return HomeWorld{}, err
+		}
+	}
+	st := stars[planets[j].Star]
+	return HomeWorld{PlanetID: planetIDs[j], X: st.X, Y: st.Y, Z: st.Z, Seq: st.Seq, Orbit: planets[j].Orbit}, nil
+}
+
 // Bin is one bar of a histogram: Count stars or systems have Planets planets.
 type Bin struct {
 	Planets int
@@ -492,8 +626,8 @@ type ValueBin struct {
 }
 
 // DepositYields returns a histogram of the yields of a game's deposits, one
-// bin per percentage from 1 to cluster.MaxYield, including bins with a Count
-// of 0. A game without deposits has no bins. It returns ErrGameNotFound if
+// bin per percentage from 1 to cluster.MaxYield, or to the highest yield if
+// a home world's is higher, including bins with a Count of 0. A game without deposits has no bins. It returns ErrGameNotFound if
 // there is no such game.
 func (s *Store) DepositYields(ctx context.Context, gameID int64) ([]ValueBin, error) {
 	return s.valueHistogram(ctx, gameID,
@@ -512,15 +646,15 @@ func (s *Store) DepositsPerPlanet(ctx context.Context, gameID int64) ([]ValueBin
 		 WHERE s.game_id = ? GROUP BY d.planet_id;`, cluster.MostDeposits)
 }
 
-// valueHistogram tallies the values from 1 to hi that query returns for a
-// game.
+// valueHistogram tallies the values from 1 that query returns for a game,
+// in bins from 1 to hi, or to the highest value if it is higher.
 func (s *Store) valueHistogram(ctx context.Context, gameID int64, query string, hi int) ([]ValueBin, error) {
 	var values []int
 	err := s.gameColumn(ctx, gameID, query, func(stmt *sqlite.Stmt) { values = append(values, stmt.ColumnInt(0)) })
 	if err != nil || len(values) == 0 {
 		return nil, err
 	}
-	bins := make([]ValueBin, hi)
+	bins := make([]ValueBin, max(hi, slices.Max(values)))
 	for i := range bins {
 		bins[i].Value = i + 1
 	}

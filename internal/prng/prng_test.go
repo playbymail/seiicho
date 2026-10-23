@@ -100,3 +100,20 @@ func TestRoll(t *testing.T) {
 		}()
 	}
 }
+
+func TestShuffle(t *testing.T) {
+	src := New(SplitSeed(0x0123456789abcdef)).Child(HomeWorlds)
+	shuffle := func(p *PRNG) []int {
+		s := []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+		p.Shuffle(len(s), func(i, j int) { s[i], s[j] = s[j], s[i] })
+		return s
+	}
+	p := src.PRNG()
+	got := fmt.Sprint(shuffle(p), p.Roll(1, 1, 10))
+	if want := "[4 2 6 5 8 3 9 1 7 0] 4"; got != want {
+		t.Errorf("Shuffle, then Roll = %s, want %s", got, want)
+	}
+	if a, b := fmt.Sprint(shuffle(src.PRNG())), fmt.Sprint(shuffle(src.PRNG())); a != b {
+		t.Errorf("PRNG did not restart: %s, %s", a, b)
+	}
+}

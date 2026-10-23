@@ -34,7 +34,7 @@
 //
 // PCG returns math/rand/v2's PCG seeded with (s1, s2). PRNG wraps that PCG
 // in math/rand/v2's Rand; Roll(n, lo, hi) sums n draws of Rand.IntN(hi-lo+1)+lo,
-// one draw per die.
+// one draw per die, and Shuffle(n, swap) calls Rand.Shuffle(n, swap).
 package prng
 
 import "math/rand/v2"
@@ -61,6 +61,10 @@ const (
 	// DepositYields is the source of a cluster's deposits' yields: one roll
 	// per deposit.
 	DepositYields Node = 7
+	// HomeWorlds is the source of a home-world run: one shuffle of the
+	// pool, then one roll per deposit of the flagged planet. Every run
+	// starts it afresh.
+	HomeWorlds Node = 8
 )
 
 // Source is a node in a tree of deterministic random sources. The zero value
@@ -119,6 +123,13 @@ func (p *PRNG) Roll(numberOfDice, lo, hi int) int {
 		sum += lo + p.r.IntN(hi-lo+1)
 	}
 	return sum
+}
+
+// Shuffle shuffles n elements, calling swap to exchange the elements with
+// indexes i and j. It draws from the random source as math/rand/v2's
+// Rand.Shuffle does. It panics if n < 0.
+func (p *PRNG) Shuffle(n int, swap func(i, j int)) {
+	p.r.Shuffle(n, swap)
 }
 
 // splitMix64 advances state by one SplitMix64 step and returns the output.

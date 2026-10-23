@@ -73,8 +73,8 @@ Each bin has these fields:
 | `max_quantity` | number | Largest quantity in the bin |
 | `count` | number | Number of deposits with a quantity in the bin |
 
-For `deposit-yield`, there is one bin per yield from 1 to 25. Each bin has
-these fields:
+For `deposit-yield`, there is one bin per yield from 1 to 25, or to the
+highest yield if a home world's is higher. Each bin has these fields:
 
 | Field | Type | Meaning |
 | --- | --- | --- |

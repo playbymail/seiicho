@@ -225,7 +225,10 @@ roll, so changing planet kinds or deposit rules never changes a budget.
 Budgets are not stored. X depends only on the game's seed and the star's
 place in canonical order, so it can be recomputed whenever it is needed.
 Every game has its own seed, so every game has different budgets. Since all
-of X is allocated, a star's budget also equals the sum of its deposits.
+of X is allocated, the budget of a star that is not a home star also equals
+the sum of its deposits. Flagging a home world raises its deposits'
+quantities, so a home star's deposits add up to more than its budget (see
+`home-worlds.md`).
 
 ### Step 3.2: Deposit counts
 
@@ -422,15 +425,17 @@ The schema has one table for deposits:
 
 ```sql
 -- A deposit of one resource on a planet. no numbers a planet's deposits
--- from 1 in creation order. A star's deposits add up to its budget,
--- which is recomputed from the game's seed rather than stored.
+-- from 1 in creation order. The deposits of a star that is not a home
+-- star add up to its budget, which is recomputed from the game's seed
+-- rather than stored. The generator draws yields of at most 25; home
+-- worlds raise them to at most 75.
 CREATE TABLE deposits (
 	id        INTEGER PRIMARY KEY AUTOINCREMENT,
 	planet_id INTEGER NOT NULL REFERENCES planets (id),
 	no        INTEGER NOT NULL CHECK (no BETWEEN 1 AND 45),
 	resource  TEXT    NOT NULL CHECK (resource IN ('gold', 'fuel', 'mets', 'nmts')),
 	quantity  INTEGER NOT NULL CHECK (quantity >= 99999),
-	yield_pct INTEGER NOT NULL CHECK (yield_pct BETWEEN 1 AND 25),
+	yield_pct INTEGER NOT NULL CHECK (yield_pct BETWEEN 1 AND 75),
 	UNIQUE (planet_id, no)
 ) STRICT;
 ```

@@ -277,13 +277,29 @@ func TestPlanets(t *testing.T) {
 	if n := count(t, conn, `SELECT count(*) FROM planets WHERE habitability = 0;`); n != 3 {
 		t.Errorf("%d planets default to habitability 0, want 3", n)
 	}
-	const withHabitability = `INSERT INTO planets (star_id, orbit, kind, habitability) VALUES (?, ?, ?, ?);`
-	mustExec(t, conn, withHabitability, star, 3, "rocky", 25)
+	const withHabitability = `INSERT INTO planets (star_id, orbit, kind, habitability, is_homeworld) VALUES (?, ?, ?, ?, ?);`
+	mustExec(t, conn, withHabitability, star, 3, "rocky", 24, 0)
+	mustExec(t, conn, withHabitability, star, 4, "rocky", 25, 1)
 	for _, h := range []any{-1, 26, nil} {
-		err := exec(t, conn, withHabitability, star, 4, "rocky", h)
+		err := exec(t, conn, withHabitability, star, 5, "rocky", h, 0)
 		if c := sqlite.ErrCode(err); c != sqlite.ResultConstraintCheck && c != sqlite.ResultConstraintNotNull {
 			t.Errorf("habitability %v = %v, want a constraint error", h, err)
 		}
+	}
+	// A home world always has habitability 25, and no other planet does.
+	for _, args := range [][]any{{25, 0}, {24, 1}, {0, 1}, {25, 2}, {0, -1}} {
+		if err := exec(t, conn, withHabitability, star, 5, "rocky", args[0], args[1]); sqlite.ErrCode(err) != sqlite.ResultConstraintCheck {
+			t.Errorf("habitability %v with is_homeworld %v = %v, want a check constraint error", args[0], args[1], err)
+		}
+	}
+	if err := exec(t, conn, `INSERT INTO planets (star_id, orbit, kind, habitability) VALUES (?, 5, 'rocky', 25);`, star); sqlite.ErrCode(err) != sqlite.ResultConstraintCheck {
+		t.Errorf("habitability 25 without is_homeworld = %v, want a check constraint error", err)
+	}
+	if err := exec(t, conn, `UPDATE planets SET is_homeworld = 1 WHERE star_id = ? AND orbit = 3;`, star); sqlite.ErrCode(err) != sqlite.ResultConstraintCheck {
+		t.Errorf("flagging a planet without raising its habitability = %v, want a check constraint error", err)
+	}
+	if n := count(t, conn, `SELECT count(*) FROM planets WHERE is_homeworld = 0;`); n != 4 {
+		t.Errorf("%d planets default to is_homeworld 0, want 4", n)
 	}
 }
 
@@ -305,13 +321,15 @@ func TestDeposits(t *testing.T) {
 	const insert = `INSERT INTO deposits (planet_id, no, resource, quantity, yield_pct) VALUES (?, ?, ?, ?, ?);`
 	mustExec(t, conn, insert, planet, 1, "gold", 99999, 1)
 	mustExec(t, conn, insert, planet, 45, "nmts", int64(4_692_000_000), 25)
+	// Home worlds raise yields above the generator's 25.
+	mustExec(t, conn, insert, planet, 44, "mets", 99999, 75)
 	if err := exec(t, conn, insert, planet, 1, "fuel", 99999, 1); sqlite.ErrCode(err) != sqlite.ResultConstraintUnique {
 		t.Errorf("duplicate deposit number = %v, want a unique constraint error", err)
 	}
 	for _, args := range [][]any{
 		{planet, 0, "fuel", 99999, 1}, {planet, 46, "fuel", 99999, 1},
 		{planet, 2, "Fuel", 99999, 1}, {planet, 2, "metals", 99999, 1},
-		{planet, 2, "fuel", 99998, 1}, {planet, 2, "fuel", 99999, 0}, {planet, 2, "fuel", 99999, 26},
+		{planet, 2, "fuel", 99998, 1}, {planet, 2, "fuel", 99999, 0}, {planet, 2, "fuel", 99999, 76},
 	} {
 		if err := exec(t, conn, insert, args...); sqlite.ErrCode(err) != sqlite.ResultConstraintCheck {
 			t.Errorf("deposit %v = %v, want a check constraint error", args[1:], err)
@@ -709,6 +727,19 @@ func TestDepositHistograms(t *testing.T) {
 		t.Errorf("%d of %d planets have deposits", len(perPlanet), len(planets))
 	}
 
+	// A home world's yield above cluster.MaxYield extends the yield bins to
+	// it.
+	withConn(t, s, func(conn *sqlite.Conn) {
+		mustExec(t, conn, `UPDATE deposits SET yield_pct = 40 WHERE id = (SELECT min(id) FROM deposits);`)
+	})
+	bins, err := s.DepositYields(t.Context(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bins) != 40 || bins[39] != (store.ValueBin{Value: 40, Count: 1}) || bins[30].Count != 0 {
+		t.Errorf("DepositYields with a yield of 40 = %+v, want 40 bins, the last counting 1", bins)
+	}
+
 	checkEmpty(t, s)
 }
 
@@ -753,4 +784,204 @@ func checkEmpty(t *testing.T, s *store.Store) {
 			SELECT p.id FROM planets p JOIN stars s ON s.id = p.star_id WHERE s.game_id = ?);`, g.ID)
 	})
 	check("without deposits")
+}
+
+// clusterRows lists every planet and deposit in the store, except those of
+// the planet with ID except, so that tests can see whether anything changed.
+func clusterRows(t *testing.T, s *store.Store, except int64) string {
+	t.Helper()
+	var rows []string
+	withConn(t, s, func(conn *sqlite.Conn) {
+		for _, query := range []string{
+			`SELECT id, star_id, orbit, kind, habitability, is_homeworld FROM planets WHERE id != ? ORDER BY id;`,
+			`SELECT id, planet_id, no, resource, quantity, yield_pct FROM deposits WHERE planet_id != ? ORDER BY id;`,
+		} {
+			err := sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
+				Args: []any{except},
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					var row []string
+					for i := range stmt.ColumnCount() {
+						row = append(row, stmt.ColumnText(i))
+					}
+					rows = append(rows, fmt.Sprint(row))
+					return nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	return fmt.Sprint(rows)
+}
+
+// homeDeposits returns the deposits of the planet with planetID, in
+// deposit-number order. Their Planet is 0.
+func homeDeposits(t *testing.T, s *store.Store, planetID int64) []cluster.Deposit {
+	t.Helper()
+	var deposits []cluster.Deposit
+	withConn(t, s, func(conn *sqlite.Conn) {
+		err := sqlitex.Execute(conn, `SELECT no, resource, quantity, yield_pct FROM deposits WHERE planet_id = ? ORDER BY no;`,
+			&sqlitex.ExecOptions{
+				Args: []any{planetID},
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					deposits = append(deposits, cluster.Deposit{
+						No: stmt.ColumnInt(0), Resource: stmt.ColumnText(1), Quantity: stmt.ColumnInt64(2), Yield: stmt.ColumnInt(3),
+					})
+					return nil
+				},
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	return deposits
+}
+
+func TestFlagHomeWorld(t *testing.T) {
+	s, err := store.OpenPrivateMemory(t.Context(), memoryName(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(1_800_000_000, 0)
+	if _, err := s.CreateAccount(t.Context(), "admin@example.com", []byte("x"), true, now); err != nil {
+		t.Fatal(err)
+	}
+	seed1, seed2 := prng.SplitSeed(0x0123456789abcdef)
+	game := func(opts store.ClusterOptions) int64 {
+		t.Helper()
+		g, err := s.CreateGame(t.Context(), seed1, seed2, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, _, err := s.GenerateCluster(t.Context(), g.ID, opts); err != nil {
+			t.Fatal(err)
+		}
+		return g.ID
+	}
+	sorted, unsorted := game(store.ClusterOptions{SortStars: true, SortPlanets: true}), game(store.ClusterOptions{})
+	bare, err := s.CreateGame(t.Context(), seed1, seed2, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := game(store.ClusterOptions{})
+	withConn(t, s, func(conn *sqlite.Conn) {
+		mustExec(t, conn, `UPDATE games SET is_active = 0 WHERE id = ?;`, closed)
+	})
+
+	before := clusterRows(t, s, 0)
+	for _, tc := range []struct {
+		name   string
+		gameID int64
+		want   error
+	}{
+		{"missing game", 999, store.ErrGameNotFound},
+		{"inactive game", closed, store.ErrGameInactive},
+		{"game without a cluster", bare.ID, store.ErrNoCluster},
+		// No system has a neighbor within 1.
+		{"no planet qualifies", sorted, cluster.ErrNoHomeWorld},
+	} {
+		if _, err := s.FlagHomeWorld(t.Context(), tc.gameID, 3, 1); !errors.Is(err, tc.want) {
+			t.Errorf("FlagHomeWorld, %s = %v, want %v", tc.name, err, tc.want)
+		}
+	}
+	if clusterRows(t, s, 0) != before {
+		t.Fatal("a failed FlagHomeWorld changed the database")
+	}
+
+	// The store flags the planets that cluster.HomeWorld chooses, however
+	// the game's rows are ordered, and a failed run leaves no trace.
+	root := prng.New(seed1, seed2)
+	stars := cluster.Generate(root.Child(prng.Cluster).PCG())
+	planets := cluster.Planets(stars, root.Child(prng.Planets).PRNG(), root.Child(prng.PlanetKinds).PRNG(), root.Child(prng.Habitability).PRNG())
+	deposits := cluster.Deposits(stars, planets, root.Child(prng.ResourceBudgets).PRNG(), root.Child(prng.Deposits).PRNG(), root.Child(prng.DepositYields).PRNG())
+	var homes []int
+	for run := range 6 {
+		j, err := cluster.HomeWorld(stars, planets, homes, 6, 6, root.Child(prng.HomeWorlds).PRNG())
+		if err != nil {
+			t.Fatal(err)
+		}
+		st := stars[planets[j].Star]
+		for _, gameID := range []int64{sorted, unsorted} {
+			// Fail once in one game only: the games still flag the same
+			// planets.
+			if run == 2 && gameID == sorted {
+				failed := clusterRows(t, s, 0)
+				if _, err := s.FlagHomeWorld(t.Context(), gameID, 16, 1); !errors.Is(err, cluster.ErrNoHomeWorld) {
+					t.Fatalf("FlagHomeWorld(16, 1) = %v, want ErrNoHomeWorld", err)
+				}
+				if clusterRows(t, s, 0) != failed {
+					t.Fatal("a failed FlagHomeWorld changed the database")
+				}
+			}
+			var planetID int64
+			withConn(t, s, func(conn *sqlite.Conn) {
+				err := sqlitex.Execute(conn,
+					`SELECT p.id FROM planets p JOIN stars s ON s.id = p.star_id
+					 WHERE s.game_id = ? AND s.x = ? AND s.y = ? AND s.z = ? AND s.seq = ? AND p.orbit = ?;`,
+					&sqlitex.ExecOptions{
+						Args: []any{gameID, st.X, st.Y, st.Z, st.Seq, planets[j].Orbit},
+						ResultFunc: func(stmt *sqlite.Stmt) error {
+							planetID = stmt.ColumnInt64(0)
+							return nil
+						},
+					})
+				if err != nil {
+					t.Fatal(err)
+				}
+			})
+			old := homeDeposits(t, s, planetID)
+			others := clusterRows(t, s, planetID)
+
+			got, err := s.FlagHomeWorld(t.Context(), gameID, 6, 6)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := store.HomeWorld{PlanetID: planetID, X: st.X, Y: st.Y, Z: st.Z, Seq: st.Seq, Orbit: planets[j].Orbit}
+			if got != want {
+				t.Fatalf("game %d, run %d: FlagHomeWorld = %+v, want %+v", gameID, run, got, want)
+			}
+
+			// The planet is flagged with habitability 25, and its deposits
+			// are raised as cluster.RaiseHomeDeposits raises them, drawing
+			// after the shuffle.
+			var hab, flagged int
+			withConn(t, s, func(conn *sqlite.Conn) {
+				hab = count(t, conn, fmt.Sprintf(`SELECT habitability FROM planets WHERE id = %d;`, planetID))
+				flagged = count(t, conn, fmt.Sprintf(`SELECT is_homeworld FROM planets WHERE id = %d;`, planetID))
+			})
+			if hab != 25 || flagged != 1 {
+				t.Errorf("game %d: planet %d has habitability %d and is_homeworld %d, want 25 and 1", gameID, planetID, hab, flagged)
+			}
+			var wantDeposits []cluster.Deposit
+			for _, d := range deposits {
+				if d.Planet == j {
+					d.Planet = 0
+					wantDeposits = append(wantDeposits, d)
+				}
+			}
+			p := root.Child(prng.HomeWorlds).PRNG()
+			if _, err := cluster.HomeWorld(stars, planets, homes, 6, 6, p); err != nil {
+				t.Fatal(err)
+			}
+			cluster.RaiseHomeDeposits(wantDeposits, p)
+			raised := homeDeposits(t, s, planetID)
+			if fmt.Sprint(raised) != fmt.Sprint(wantDeposits) {
+				t.Errorf("game %d: home world deposits = %v, want %v", gameID, raised, wantDeposits)
+			}
+			for k, d := range raised {
+				if rise := d.Yield - old[k].Yield; rise < 1 || rise > 10 || d.Quantity != old[k].Quantity*125/100 {
+					t.Errorf("game %d: deposit %d went from %+v to %+v", gameID, d.No, old[k], d)
+				}
+			}
+
+			// Nothing else changed.
+			if clusterRows(t, s, planetID) != others {
+				t.Errorf("game %d: FlagHomeWorld changed more than the home world and its deposits", gameID)
+			}
+		}
+		planets[j].Habitability = 25
+		homes = append(homes, j)
+	}
 }
