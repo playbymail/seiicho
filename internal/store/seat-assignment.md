@@ -2,7 +2,7 @@
 
 How the gamemaster gives a seat its starting faction on a home world.
 
-Status: **draft**, not yet approved. See [Open questions](#open-questions).
+Status: **draft**, not yet approved.
 
 A seat can start the game only on a planet that has been flagged as a home
 world (see `internal/cluster/home-worlds.md`). This document covers the step
@@ -47,6 +47,7 @@ An assignment is permanent: there is no command to unassign or move a seat.
 6. Control has no cycles: following controlling factions from any faction
    always ends at a faction controlled by a seat.
 7. A new faction is named `Unnamed Faction` unless the operator names it.
+   Every name follows [Names](#names).
 8. The first faction assigned to a seat is its empire (`is_empire = 1`).
 9. Gamemasters never play. A gamemaster seat cannot be assigned, and a seat
    with an empire cannot become a gamemaster seat.
@@ -54,6 +55,40 @@ An assignment is permanent: there is no command to unassign or move a seat.
 This command creates only empires, and an empire is controlled by its seat,
 so it can never create a cycle. Rule 6 binds whatever later changes control
 of a faction; see [Control cycles](#control-cycles).
+
+## Names
+
+These rules apply to every name in the game, not just faction names. A
+name is cleaned, then checked:
+
+1. Replace every non-printing character with a space. That is every
+   character Go's `unicode.IsPrint` rejects: ASCII control characters
+   (U+0000–U+001F and U+007F), and non-printing Unicode such as U+00A0.
+2. Trim leading and trailing spaces, and replace each run of internal spaces
+   with one space.
+3. Reject the name unless it is 1 to 25 characters, every one of them
+   printable ASCII (U+0020–U+007E) other than `"` and `\`.
+
+So the stored name is printable ASCII that JSON never needs to escape.
+Other non-ASCII characters, such as `é`, are rejected rather than replaced.
+Names need not be unique.
+
+The cleaning lives in one function that every command taking a name calls
+before it writes. In zsh, `seiicho assign-seat --name $'  Red\tStar  '`
+passes a tab between the words and stores `Red Star`. A name that is empty after cleaning, too long, or has a
+rejected character fails the run before the database is opened.
+
+The schema checks the result too, so a name written by any other path
+still follows the rules:
+
+```sql
+CHECK (length(name) BETWEEN 1 AND 25
+	AND name NOT GLOB '*[^ -~]*'
+	AND instr(name, '"') = 0
+	AND instr(name, '\') = 0
+	AND name = trim(name, ' ')
+	AND instr(name, '  ') = 0)
+```
 
 ## Choosing the planet
 
@@ -111,7 +146,13 @@ CREATE TABLE races (
 -- and an empire always has a home world.
 CREATE TABLE factions (
 	id                     INTEGER PRIMARY KEY AUTOINCREMENT,
-	name                   TEXT    NOT NULL DEFAULT 'Unnamed Faction',
+	name                   TEXT    NOT NULL DEFAULT 'Unnamed Faction'
+		CHECK (length(name) BETWEEN 1 AND 25
+			AND name NOT GLOB '*[^ -~]*'
+			AND instr(name, '"') = 0
+			AND instr(name, '\') = 0
+			AND name = trim(name, ' ')
+			AND instr(name, '  ') = 0),
 	race_id                INTEGER,
 	home_planet_id         INTEGER,
 	is_empire              INTEGER NOT NULL DEFAULT 0 CHECK (is_empire IN (0, 1)),
@@ -177,7 +218,8 @@ one of the factions it controls, directly or indirectly. A recursive CTE over
 - The seat must be an active player seat in the game with no empire.
 - `--planet`, if given, must be a home world in the game with fewer than 15
   seats assigned.
-- `--name`, if given, names the empire. See open question 1 for its rules.
+- `--name`, if given, names the empire, cleaned and checked as in
+  [Names](#names).
 - On success it prints the assignment described in
   [Assignment](#assignment). `--json` prints the same as an object,
   documented in `docs/reference/seiicho-json.md`.
@@ -227,7 +269,11 @@ IDs, so the command can list them. `PromoteSeat` gains the empire check, and
 
 - A seat is assigned to a named home world, and the faction is an empire
   named `Unnamed Faction`, controlled by the seat. With `--name`, it has
-  that name.
+  that name, cleaned.
+- Name cleaning: non-printing characters become spaces; spaces are trimmed
+  and runs compressed; 25 characters are accepted and 26 rejected; a name
+  that is empty after cleaning, or has `"`, `\`, or non-ASCII such as `é`,
+  is rejected.
 - The first seat on a home world creates its race; later seats reuse it.
 - A planet that is not a home world, or is in another game, is rejected.
 - The 16th seat on a home world is rejected; the 15th is accepted. A
@@ -245,7 +291,8 @@ IDs, so the command can list them. `PromoteSeat` gains the empire check, and
   home world; a second empire for a seat; a race without a home world or the
   reverse; a faction whose race belongs to another home world; a second race
   for a planet; and any change to a faction's race or home world, including
-  setting them on a minion created without them.
+  setting them on a minion created without them; and a name that breaks
+  the rules in [Names](#names).
 - The schema accepts a minion with no race or home world.
 
 ## Rebuilding a game
@@ -257,12 +304,12 @@ after the same `flag-home-world` runs. Runs without `--planet` choose the
 same planet only if the same home worlds are flagged and filled in the same
 order.
 
-## Open questions
+## Settled in review
 
-1. **What makes a valid faction name?** I suggest: leading and trailing
-   spaces trimmed, then 1 to 32 characters, printable only, with no
-   uniqueness requirement. Should names be unique within a game, and is 32
-   the right limit?
-2. **Can a minion with no home world gain one later?** This draft says no:
-   the trigger fixes race and home world at creation, even when they start
-   empty.
+- A race is exactly one home world, and has no other attributes.
+- A faction's race and home world never change. A minion created without
+  them never gains them.
+- A deactivated seat keeps its place on its home world.
+- Gamemasters never play.
+- Seats are never unassigned or moved.
+- Names follow [Names](#names) and need not be unique.
