@@ -73,12 +73,13 @@ func TestGenerateCluster(t *testing.T) {
 		if fmt.Sprint(stars) != fmt.Sprint(want) {
 			t.Errorf("%+v: GenerateCluster did not draw from the game's cluster source", opts)
 		}
-		wantPlanets := cluster.Planets(want, prng.New(seed1, seed2).Child(prng.Planets).PRNG())
+		root := prng.New(seed1, seed2)
+		wantPlanets := cluster.Planets(want, root.Child(prng.Planets).PRNG(), root.Child(prng.PlanetKinds).PRNG())
 		if opts.SortPlanets {
 			cluster.SortPlanets(want, wantPlanets)
 		}
 		if fmt.Sprint(planets) != fmt.Sprint(wantPlanets) {
-			t.Errorf("%+v: GenerateCluster did not draw from the game's planets source", opts)
+			t.Errorf("%+v: GenerateCluster did not draw from the game's planet sources", opts)
 		}
 		total += len(planets)
 

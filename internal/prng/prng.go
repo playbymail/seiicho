@@ -48,6 +48,8 @@ const (
 	Cluster Node = 1
 	// Planets is the source that allocates a cluster's planets to its stars.
 	Planets Node = 2
+	// PlanetKinds is the source that gives a cluster's planets their kinds.
+	PlanetKinds Node = 3
 )
 
 // Source is a node in a tree of deterministic random sources. The zero value

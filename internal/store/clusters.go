@@ -87,7 +87,7 @@ func (s *Store) GenerateCluster(ctx context.Context, gameID int64, opts ClusterO
 		starIDs[i] = conn.LastInsertRowID()
 	}
 
-	planets = cluster.Planets(stars, root.Child(prng.Planets).PRNG())
+	planets = cluster.Planets(stars, root.Child(prng.Planets).PRNG(), root.Child(prng.PlanetKinds).PRNG())
 	if opts.SortPlanets {
 		cluster.SortPlanets(stars, planets)
 	}

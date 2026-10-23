@@ -31,7 +31,10 @@ stars, 2 have 4, 7 have 3, 35 have 2, and the remaining 55 have 1: 159 stars
 in all. The stars in each system are lettered from `A`.
 
 Every star has at least one planet and at most 10, in orbits numbered from 1
-with no gaps: 721 planets in all. Each planet is rocky.
+with no gaps: 721 planets in all. Each planet is rocky, an asteroid belt, or a
+giant. Inner orbits are more likely to be rocky and outer orbits more likely
+to be giants, so expect about half rocky, a sixth asteroids, and a third
+giants.
 
 ## Check how the planets are spread
 

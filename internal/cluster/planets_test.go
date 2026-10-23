@@ -8,15 +8,17 @@ import (
 	"hash/fnv"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/playbymail/seiicho/internal/prng"
 )
 
 func TestPlanets(t *testing.T) {
-	src := prng.New(prng.SplitSeed(0x0123456789abcdef)).Child(prng.Planets)
+	root := prng.New(prng.SplitSeed(0x0123456789abcdef))
+	src, kinds := root.Child(prng.Planets), root.Child(prng.PlanetKinds)
 	stars := Generate(rand.NewPCG(1, 2))
-	planets := Planets(stars, src.PRNG())
+	planets := Planets(stars, src.PRNG(), kinds.PRNG())
 
 	if want := len(stars) + ExtraPlanets; len(planets) != want {
 		t.Fatalf("%d planets, want %d", len(planets), want)
@@ -32,8 +34,8 @@ func TestPlanets(t *testing.T) {
 		if p.Orbit != counts[p.Star] {
 			t.Errorf("planet %d of star %+v is in orbit %d, want %d", i, stars[p.Star], p.Orbit, counts[p.Star])
 		}
-		if p.Kind != Rocky {
-			t.Errorf("planet %d is %q, want %q", i, p.Kind, Rocky)
+		if !slices.Contains(kindOrder[:], p.Kind) {
+			t.Errorf("planet %d is %q, want one of %q", i, p.Kind, kindOrder)
 		}
 	}
 	for i, n := range counts {
@@ -47,16 +49,17 @@ func TestPlanets(t *testing.T) {
 	rand.New(rand.NewPCG(3, 4)).Shuffle(len(shuffled), func(i, j int) {
 		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
 	})
-	if a, b := describe(stars, planets), describe(shuffled, Planets(shuffled, src.PRNG())); a != b {
+	if a, b := describe(stars, planets), describe(shuffled, Planets(shuffled, src.PRNG(), kinds.PRNG())); a != b {
 		t.Error("shuffling the stars changed the planets")
 	}
 
-	// Pin the allocation, so that a change to the allocator or to
-	// math/rand/v2 cannot silently change the planets an existing seed makes.
+	// Pin the allocation and kinds, so that a change to the allocator, the
+	// kind weights, or math/rand/v2 cannot silently change the planets an
+	// existing seed makes.
 	h := fnv.New64a()
 	fmt.Fprint(h, describe(stars, planets))
-	if got := h.Sum64(); got != 0x9b7ffbce4f5dc3f0 {
-		t.Errorf("planets hash = %#x, want 0x9b7ffbce4f5dc3f0", got)
+	if got := h.Sum64(); got != 0x419cfe0e812638d4 {
+		t.Errorf("planets hash = %#x, want 0x419cfe0e812638d4", got)
 	}
 
 	// Sorted, planets come in (x, y, z, seq) order of their stars, then
@@ -71,8 +74,8 @@ func TestPlanets(t *testing.T) {
 	}
 	h.Reset()
 	fmt.Fprint(h, describe(stars, sorted))
-	if got := h.Sum64(); got != 0x32c4623b6cd84606 {
-		t.Errorf("sorted planets hash = %#x, want 0x32c4623b6cd84606", got)
+	if got := h.Sum64(); got != 0xc006987bf0096704 {
+		t.Errorf("sorted planets hash = %#x, want 0xc006987bf0096704", got)
 	}
 }
 
@@ -94,7 +97,7 @@ func TestPlanetsFillsStars(t *testing.T) {
 	for i := range stars {
 		stars[i] = Star{X: i % Side, Y: i / Side, Seq: "A"}
 	}
-	planets := Planets(stars, prng.New(1, 2).PRNG())
+	planets := Planets(stars, prng.New(1, 2).PRNG(), prng.New(3, 4).PRNG())
 	counts := make([]int, len(stars))
 	for _, p := range planets {
 		counts[p.Star]++
@@ -117,7 +120,69 @@ func TestPlanetsFillsStars(t *testing.T) {
 			t.Error("Planets with too few stars did not panic")
 		}
 	}()
-	Planets(stars[:62], prng.New(1, 2).PRNG())
+	Planets(stars[:62], prng.New(1, 2).PRNG(), prng.New(3, 4).PRNG())
+}
+
+func TestKindWeights(t *testing.T) {
+	// The approved matrix, from proposal-1.md: one row per number of planets
+	// a star has, one cell per orbit.
+	want := `
+20,6,14
+26,6,8 18,6,16
+29,5,6 21,6,13 17,7,16
+31,5,4 24,6,10 18,7,15 15,7,18
+32,4,4 27,5,8 21,7,12 16,7,17 12,8,20
+32,4,4 27,5,8 23,7,10 18,7,15 12,8,20 10,8,22
+32,4,4 29,5,6 23,7,10 19,7,14 13,8,19 10,8,22 9,8,23
+32,4,4 29,5,6 26,6,8 21,7,12 15,8,17 11,8,21 9,8,23 7,8,25
+32,4,4 29,5,6 26,6,8 21,7,12 16,8,16 13,8,19 10,8,22 7,8,25 6,8,26
+34,4,2 30,4,6 28,6,6 24,6,10 18,8,14 14,8,18 12,8,20 8,8,24 6,8,26 6,8,26
+`
+	got := "\n"
+	for n := 1; n <= MaxOrbits; n++ {
+		var row []string
+		for orbit := 1; orbit <= n; orbit++ {
+			w := KindWeights(n, orbit)
+			if sum := w[0] + w[1] + w[2]; sum != KindTotal {
+				t.Errorf("KindWeights(%d, %d) = %v, which sums to %d, want %d", n, orbit, w, sum, KindTotal)
+			}
+			row = append(row, fmt.Sprintf("%d,%d,%d", w[0], w[1], w[2]))
+		}
+		got += strings.Join(row, " ") + "\n"
+	}
+	if got != want {
+		t.Errorf("KindWeights matrix:%s\nwant:%s", got, want)
+	}
+
+	for _, args := range [][2]int{{1, 0}, {3, 4}, {11, 1}} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("KindWeights(%d, %d) did not panic", args[0], args[1])
+				}
+			}()
+			KindWeights(args[0], args[1])
+		}()
+	}
+}
+
+func TestDrawKind(t *testing.T) {
+	// A lone planet weighs 20,6,14: drawn often enough, each kind comes up
+	// close to 20/40, 6/40, and 14/40 of the time.
+	const draws = 40000
+	p := prng.New(5, 6).PRNG()
+	counts := map[string]int{}
+	for range draws {
+		counts[drawKind(1, 1, p)]++
+	}
+	for kind, want := range map[string]int{Rocky: 20000, Asteroids: 6000, Giant: 14000} {
+		if got := counts[kind]; got < want*95/100 || got > want*105/100 {
+			t.Errorf("%d of %d draws were %s, want about %d", got, draws, kind, want)
+		}
+	}
+	if len(counts) != 3 {
+		t.Errorf("draws gave kinds %v", counts)
+	}
 }
 
 // describe lists planets by their stars' coordinates rather than indexes.
