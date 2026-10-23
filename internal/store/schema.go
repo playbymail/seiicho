@@ -81,5 +81,10 @@ var schema = sqlitemigration.Schema{
 			kind    TEXT    NOT NULL CHECK (kind IN ('rocky', 'asteroids', 'giant')),
 			UNIQUE (star_id, orbit)
 		) STRICT;`,
+
+		// Habitability runs from 0 to 25; asteroids are always 0. The cluster
+		// generator draws at most 24; 25 is reserved for home worlds.
+		`ALTER TABLE planets ADD COLUMN
+			habitability INTEGER NOT NULL DEFAULT 0 CHECK (habitability BETWEEN 0 AND 25);`,
 	},
 }

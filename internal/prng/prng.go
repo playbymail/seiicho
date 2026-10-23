@@ -50,6 +50,8 @@ const (
 	Planets Node = 2
 	// PlanetKinds is the source that gives a cluster's planets their kinds.
 	PlanetKinds Node = 3
+	// Habitability is the source of a cluster's planets' habitability.
+	Habitability Node = 4
 )
 
 // Source is a node in a tree of deterministic random sources. The zero value

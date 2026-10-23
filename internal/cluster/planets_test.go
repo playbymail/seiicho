@@ -16,9 +16,9 @@ import (
 
 func TestPlanets(t *testing.T) {
 	root := prng.New(prng.SplitSeed(0x0123456789abcdef))
-	src, kinds := root.Child(prng.Planets), root.Child(prng.PlanetKinds)
+	src, kinds, hab := root.Child(prng.Planets), root.Child(prng.PlanetKinds), root.Child(prng.Habitability)
 	stars := Generate(rand.NewPCG(1, 2))
-	planets := Planets(stars, src.PRNG(), kinds.PRNG())
+	planets := Planets(stars, src.PRNG(), kinds.PRNG(), hab.PRNG())
 
 	if want := len(stars) + ExtraPlanets; len(planets) != want {
 		t.Fatalf("%d planets, want %d", len(planets), want)
@@ -37,6 +37,9 @@ func TestPlanets(t *testing.T) {
 		if !slices.Contains(kindOrder[:], p.Kind) {
 			t.Errorf("planet %d is %q, want one of %q", i, p.Kind, kindOrder)
 		}
+		if hi := maxHabitability[p.Kind]; p.Habitability < 0 || p.Habitability > hi {
+			t.Errorf("planet %d is %s with habitability %d, want 0 to %d", i, p.Kind, p.Habitability, hi)
+		}
 	}
 	for i, n := range counts {
 		if n < 1 || n > MaxOrbits {
@@ -49,17 +52,17 @@ func TestPlanets(t *testing.T) {
 	rand.New(rand.NewPCG(3, 4)).Shuffle(len(shuffled), func(i, j int) {
 		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
 	})
-	if a, b := describe(stars, planets), describe(shuffled, Planets(shuffled, src.PRNG(), kinds.PRNG())); a != b {
+	if a, b := describe(stars, planets), describe(shuffled, Planets(shuffled, src.PRNG(), kinds.PRNG(), hab.PRNG())); a != b {
 		t.Error("shuffling the stars changed the planets")
 	}
 
-	// Pin the allocation and kinds, so that a change to the allocator, the
-	// kind weights, or math/rand/v2 cannot silently change the planets an
-	// existing seed makes.
+	// Pin the allocation, kinds, and habitability, so that a change to the
+	// allocator, the kind weights, the habitability draws, or math/rand/v2
+	// cannot silently change the planets an existing seed makes.
 	h := fnv.New64a()
 	fmt.Fprint(h, describe(stars, planets))
-	if got := h.Sum64(); got != 0x419cfe0e812638d4 {
-		t.Errorf("planets hash = %#x, want 0x419cfe0e812638d4", got)
+	if got := h.Sum64(); got != 0xf82687e5ea24e11e {
+		t.Errorf("planets hash = %#x, want 0xf82687e5ea24e11e", got)
 	}
 
 	// Sorted, planets come in (x, y, z, seq) order of their stars, then
@@ -74,8 +77,8 @@ func TestPlanets(t *testing.T) {
 	}
 	h.Reset()
 	fmt.Fprint(h, describe(stars, sorted))
-	if got := h.Sum64(); got != 0xc006987bf0096704 {
-		t.Errorf("sorted planets hash = %#x, want 0xc006987bf0096704", got)
+	if got := h.Sum64(); got != 0x425671f763e01ec {
+		t.Errorf("sorted planets hash = %#x, want 0x425671f763e01ec", got)
 	}
 }
 
@@ -97,7 +100,7 @@ func TestPlanetsFillsStars(t *testing.T) {
 	for i := range stars {
 		stars[i] = Star{X: i % Side, Y: i / Side, Seq: "A"}
 	}
-	planets := Planets(stars, prng.New(1, 2).PRNG(), prng.New(3, 4).PRNG())
+	planets := Planets(stars, prng.New(1, 2).PRNG(), prng.New(3, 4).PRNG(), prng.New(5, 6).PRNG())
 	counts := make([]int, len(stars))
 	for _, p := range planets {
 		counts[p.Star]++
@@ -120,11 +123,11 @@ func TestPlanetsFillsStars(t *testing.T) {
 			t.Error("Planets with too few stars did not panic")
 		}
 	}()
-	Planets(stars[:62], prng.New(1, 2).PRNG(), prng.New(3, 4).PRNG())
+	Planets(stars[:62], prng.New(1, 2).PRNG(), prng.New(3, 4).PRNG(), prng.New(5, 6).PRNG())
 }
 
 func TestKindWeights(t *testing.T) {
-	// The approved matrix, from proposal-1.md: one row per number of planets
+	// The approved matrix, from planetary-resources.md: one row per number of planets
 	// a star has, one cell per orbit.
 	want := `
 20,6,14
@@ -185,12 +188,44 @@ func TestDrawKind(t *testing.T) {
 	}
 }
 
+// maxHabitability is the highest habitability each kind can draw.
+var maxHabitability = map[string]int{Rocky: 24, Asteroids: 0, Giant: 15}
+
+func TestDrawHabitability(t *testing.T) {
+	// The average of two draws is most likely near the middle of the range
+	// and least likely at its ends: for Rocky, 12 comes from 49 of the 625
+	// pairs and 0 from 2.
+	const draws = 62500
+	p := prng.New(7, 8).PRNG()
+	for kind, middle := range map[string]int{Rocky: 12, Giant: 7} {
+		counts := make([]int, maxHabitability[kind]+1)
+		for range draws {
+			h := drawHabitability(kind, p)
+			if h < 0 || h >= len(counts) {
+				t.Fatalf("%s drew habitability %d, want 0 to %d", kind, h, len(counts)-1)
+			}
+			counts[h]++
+		}
+		for h, n := range counts {
+			if n == 0 {
+				t.Errorf("%s never drew habitability %d in %d draws", kind, h, draws)
+			}
+			if h != middle && n >= counts[middle] {
+				t.Errorf("%s drew %d %d times and %d %d times, want %d most often", kind, h, n, middle, counts[middle], middle)
+			}
+		}
+	}
+	if got := drawHabitability(Asteroids, p); got != 0 {
+		t.Errorf("asteroids drew habitability %d, want 0", got)
+	}
+}
+
 // describe lists planets by their stars' coordinates rather than indexes.
 func describe(stars []Star, planets []Planet) string {
 	var s []string
 	for _, p := range planets {
 		st := stars[p.Star]
-		s = append(s, fmt.Sprint(st.X, st.Y, st.Z, st.Seq, p.Orbit, p.Kind))
+		s = append(s, fmt.Sprint(st.X, st.Y, st.Z, st.Seq, p.Orbit, p.Kind, p.Habitability))
 	}
 	return fmt.Sprint(s)
 }

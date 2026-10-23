@@ -87,14 +87,14 @@ func (s *Store) GenerateCluster(ctx context.Context, gameID int64, opts ClusterO
 		starIDs[i] = conn.LastInsertRowID()
 	}
 
-	planets = cluster.Planets(stars, root.Child(prng.Planets).PRNG(), root.Child(prng.PlanetKinds).PRNG())
+	planets = cluster.Planets(stars, root.Child(prng.Planets).PRNG(), root.Child(prng.PlanetKinds).PRNG(), root.Child(prng.Habitability).PRNG())
 	if opts.SortPlanets {
 		cluster.SortPlanets(stars, planets)
 	}
 	for _, p := range planets {
 		err = sqlitex.Execute(conn,
-			`INSERT INTO planets (star_id, orbit, kind) VALUES (?, ?, ?);`,
-			&sqlitex.ExecOptions{Args: []any{starIDs[p.Star], p.Orbit, p.Kind}})
+			`INSERT INTO planets (star_id, orbit, kind, habitability) VALUES (?, ?, ?, ?);`,
+			&sqlitex.ExecOptions{Args: []any{starIDs[p.Star], p.Orbit, p.Kind, p.Habitability}})
 		if err != nil {
 			return nil, nil, err
 		}

@@ -74,7 +74,7 @@ func TestGenerateCluster(t *testing.T) {
 			t.Errorf("%+v: GenerateCluster did not draw from the game's cluster source", opts)
 		}
 		root := prng.New(seed1, seed2)
-		wantPlanets := cluster.Planets(want, root.Child(prng.Planets).PRNG(), root.Child(prng.PlanetKinds).PRNG())
+		wantPlanets := cluster.Planets(want, root.Child(prng.Planets).PRNG(), root.Child(prng.PlanetKinds).PRNG(), root.Child(prng.Habitability).PRNG())
 		if opts.SortPlanets {
 			cluster.SortPlanets(want, wantPlanets)
 		}
@@ -100,7 +100,7 @@ func TestGenerateCluster(t *testing.T) {
 				t.Fatal(err)
 			}
 			err = sqlitex.Execute(conn,
-				`SELECT s.x, s.y, s.z, s.seq, p.orbit, p.kind
+				`SELECT s.x, s.y, s.z, s.seq, p.orbit, p.kind, p.habitability
 				 FROM planets p JOIN stars s ON s.id = p.star_id
 				 WHERE s.game_id = ? ORDER BY p.id;`,
 				&sqlitex.ExecOptions{
@@ -108,7 +108,7 @@ func TestGenerateCluster(t *testing.T) {
 					ResultFunc: func(stmt *sqlite.Stmt) error {
 						storedPlanets = append(storedPlanets, fmt.Sprint(
 							stmt.ColumnInt(0), stmt.ColumnInt(1), stmt.ColumnInt(2), stmt.ColumnText(3),
-							stmt.ColumnInt(4), stmt.ColumnText(5)))
+							stmt.ColumnInt(4), stmt.ColumnText(5), stmt.ColumnInt(6)))
 						return nil
 					},
 				})
@@ -122,7 +122,7 @@ func TestGenerateCluster(t *testing.T) {
 		var generated []string
 		for _, p := range wantPlanets {
 			st := want[p.Star]
-			generated = append(generated, fmt.Sprint(st.X, st.Y, st.Z, st.Seq, p.Orbit, p.Kind))
+			generated = append(generated, fmt.Sprint(st.X, st.Y, st.Z, st.Seq, p.Orbit, p.Kind, p.Habitability))
 		}
 		if fmt.Sprint(storedPlanets) != fmt.Sprint(generated) {
 			t.Errorf("%+v: stored %d planets that differ from the %d generated", opts, len(storedPlanets), len(generated))
@@ -207,6 +207,18 @@ func TestPlanets(t *testing.T) {
 	}
 	if err := exec(t, conn, insert, star+1, 3, "rocky"); sqlite.ErrCode(err) != sqlite.ResultConstraintForeignKey {
 		t.Errorf("planet of a missing star = %v, want a foreign key error", err)
+	}
+
+	if n := count(t, conn, `SELECT count(*) FROM planets WHERE habitability = 0;`); n != 3 {
+		t.Errorf("%d planets default to habitability 0, want 3", n)
+	}
+	const withHabitability = `INSERT INTO planets (star_id, orbit, kind, habitability) VALUES (?, ?, ?, ?);`
+	mustExec(t, conn, withHabitability, star, 3, "rocky", 25)
+	for _, h := range []any{-1, 26, nil} {
+		err := exec(t, conn, withHabitability, star, 4, "rocky", h)
+		if c := sqlite.ErrCode(err); c != sqlite.ResultConstraintCheck && c != sqlite.ResultConstraintNotNull {
+			t.Errorf("habitability %v = %v, want a constraint error", h, err)
+		}
 	}
 }
 

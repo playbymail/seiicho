@@ -1,11 +1,13 @@
-# Proposal 1: Planet kinds and habitability
+# Planetary resources
+
+How the cluster generator gives each planet a kind and a habitability.
 
 Status:
 
-- **Step 1, planet kinds: approved and implemented** in `planets.go`
+- **Planet kinds: approved and implemented** in `planets.go`
   (`KindWeights`, drawn from the `prng.PlanetKinds` source).
-- **Step 2, habitability: draft, not approved.** No code until the design is
-  approved.
+- **Habitability: approved and implemented** in `planets.go`
+  (`drawHabitability`, drawn from the `prng.Habitability` source).
 
 We are generating a game world, not simulating planetary formation. The
 result should be plausible, deterministic, and easy to explain.
@@ -14,8 +16,7 @@ Generation has two separate steps:
 
 1. **Planet kind.** Weighted random selection, influenced by the planet's
    orbit and its star's number of planets.
-2. **Habitability.** A value within the range allowed for that kind, also
-   influenced by orbit.
+2. **Habitability.** A value within the range allowed for that kind.
 
 ## Background: how planets are allocated
 
@@ -113,20 +114,33 @@ about:
 
 ## Step 2: Assign habitability
 
-Not approved. Once a planet's kind is known, its habitability comes from a
-separate probability distribution influenced by orbit.
+Once a planet has its kind, the generator draws its habitability from the
+planet's kind alone. Orbit has no influence.
 
-Hard limits:
+| Kind      | Habitability | Draw                                 | Average |
+| --------- | ------------ | ------------------------------------ | ------- |
+| Rocky     | 0–24         | Two draws from 0–24, averaged        | 12      |
+| Asteroids | 0            | None                                 | 0       |
+| Giant     | 0–15         | Two draws from 0–15, averaged        | 7.5     |
 
-| Kind      | Habitability |
-| --------- | ------------ |
-| Rocky     | 0–25         |
-| Asteroids | 0            |
-| Giant     | 0–15         |
+"Averaged" means the sum of the two draws divided by 2, rounded down. In the
+code that is `Roll(2, 0, 24) / 2` for rocky planets and `Roll(2, 0, 15) / 2`
+for giants.
 
-Orbit should bias the probabilities, not restrict them. For example, a rocky
-planet in orbit 1 should be less likely to get habitability 20 than one in
-orbit 4, but both must be possible.
+Averaging two draws makes values near the middle of the range common and
+values at either end rare. A rocky planet has habitability 12 about 1 time in
+13, and 0 or 24 about 1 time in 300.
 
-The habitability curves are designed independently of the kind weights. They
-are still to be decided.
+Habitability is drawn in the same order as kinds: stars in (x, y, z, seq)
+order, and each star's planets in orbit order. It comes from its own child
+source, `prng.Habitability`. Asteroid belts draw nothing.
+
+### Storage
+
+The `planets` table stores habitability as
+`INTEGER NOT NULL DEFAULT 0 CHECK (habitability BETWEEN 0 AND 25)`, added by
+migration 2. Planets generated before migration 2 have habitability 0.
+
+The check allows 25, but the generator never draws it: rocky planets top out
+at 24. Habitability 25 is reserved for players' home worlds, which a later,
+separate process will assign. That process is not designed yet.

@@ -36,6 +36,10 @@ giant. Inner orbits are more likely to be rocky and outer orbits more likely
 to be giants, so expect about half rocky, a sixth asteroids, and a third
 giants.
 
+Each planet also has a habitability. Rocky planets range from 0 to 24 and
+giants from 0 to 15, with values near the middle of each range most common.
+Asteroid belts are always 0.
+
 ## Check how the planets are spread
 
 To see how many stars have each number of planets, run `show-histogram`:

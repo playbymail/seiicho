@@ -29,9 +29,10 @@ const (
 // Planet is a planet in Orbit around stars[Star], for the stars passed to
 // Planets.
 type Planet struct {
-	Star  int
-	Orbit int
-	Kind  string
+	Star         int
+	Orbit        int
+	Kind         string
+	Habitability int
 }
 
 // Compare orders stars by (x, y, z, seq).
@@ -40,7 +41,8 @@ func Compare(a, b Star) int {
 }
 
 // Planets allocates planets to stars, drawing from alloc, and then gives
-// each planet a kind, drawing from kinds. It sorts the stars by
+// each planet a kind, drawing from kinds, and a habitability, drawing from
+// habitability. It sorts the stars by
 // (x, y, z, seq), gives each one planet, and then makes ExtraPlanets random
 // allocations with replacement, each choosing a star with Roll(1, 0, n-1)
 // from the n stars that have fewer than MaxOrbits planets. A star's planets
@@ -49,13 +51,14 @@ func Compare(a, b Star) int {
 // Once every star has all its planets, it visits the stars in
 // (x, y, z, seq) order and their planets in orbit order, and draws each
 // planet's kind with Roll(1, 1, KindTotal) against the cumulative
-// KindWeights for its orbit and its star's number of planets.
+// KindWeights for its orbit and its star's number of planets. It then
+// draws the planet's habitability with drawHabitability.
 //
 // It returns the planets in the order they were allocated, so a planet's
 // place does not reveal how many planets its star has; SortPlanets puts
 // them in star order. The result depends on the stars but not on their
 // order. It panics if stars cannot hold ExtraPlanets more planets.
-func Planets(stars []Star, alloc, kinds *prng.PRNG) []Planet {
+func Planets(stars []Star, alloc, kinds, habitability *prng.PRNG) []Planet {
 	order := make([]int, len(stars))
 	for i := range order {
 		order[i] = i
@@ -93,6 +96,7 @@ func Planets(stars []Star, alloc, kinds *prng.PRNG) []Planet {
 	for i := range order {
 		for _, j := range orbits[i] {
 			planets[j].Kind = drawKind(counts[i], planets[j].Orbit, kinds)
+			planets[j].Habitability = drawHabitability(planets[j].Kind, habitability)
 		}
 	}
 	return planets
@@ -144,6 +148,23 @@ func drawKind(n, orbit int, p *prng.PRNG) string {
 		roll -= w
 	}
 	panic("cluster: kind weights do not sum to KindTotal")
+}
+
+// drawHabitability draws the habitability of a planet of kind: the average,
+// rounded down, of two draws from 0 to 24 for Rocky or 0 to 15 for Giant.
+// Asteroids are always 0 and draw nothing. Habitability 25 is reserved for
+// home worlds, so it is never drawn.
+func drawHabitability(kind string, p *prng.PRNG) int {
+	switch kind {
+	case Rocky:
+		return p.Roll(2, 0, 24) / 2
+	case Giant:
+		return p.Roll(2, 0, 15) / 2
+	case Asteroids:
+		return 0
+	default:
+		panic("cluster: unknown planet kind")
+	}
 }
 
 // SortStars sorts stars by (x, y, z, seq).
