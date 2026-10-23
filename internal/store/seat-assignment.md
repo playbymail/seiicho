@@ -70,6 +70,9 @@ name is cleaned, then checked:
    printable ASCII (U+0020–U+007E) other than `"` and `\`.
 
 So the stored name is printable ASCII that JSON never needs to escape.
+`<`, `>`, and `&` are allowed. The `--json` output keeps Go's default
+encoder, which escapes them anyway: `R&D` prints as `R\u0026D`, which is
+still the same JSON string.
 Other non-ASCII characters, such as `é`, are rejected rather than replaced.
 Names need not be unique.
 
