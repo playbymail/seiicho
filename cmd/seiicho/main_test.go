@@ -386,6 +386,88 @@ func TestListEmptyJSON(t *testing.T) {
 	}
 }
 
+func TestSummarizePlanets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "game.db")
+	db, err := store.Create(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateAccount(t.Context(), "admin@example.com", []byte("x"), true, time.Unix(1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	flags := []string{"--env", "test", "--db", path}
+	if err := run(t.Context(), append([]string{"create-game", "--seed", "0x0123456789abcdef"}, flags...)); err != nil {
+		t.Fatal(err)
+	}
+	args := func(extra ...string) []string {
+		return append(append([]string{"summarize-planets"}, flags...), extra...)
+	}
+
+	if _, err := capture(t, args("--by-planet-type")...); err == nil || !strings.Contains(err.Error(), "--game is required") {
+		t.Errorf("without --game = %v, want --game is required", err)
+	}
+	if _, err := capture(t, args("--game", "1")...); err == nil || !strings.Contains(err.Error(), "--by-planet-type is required") {
+		t.Errorf("without --by-planet-type = %v, want --by-planet-type is required", err)
+	}
+	if _, err := capture(t, args("--game", "2", "--by-planet-type")...); !errors.Is(err, store.ErrGameNotFound) {
+		t.Errorf("missing game = %v, want ErrGameNotFound", err)
+	}
+	if got, err := capture(t, args("--game", "1", "--by-planet-type")...); err != nil || got != "TYPE  PLANETS  MIN  AVG  MAX\n" {
+		t.Errorf("without a cluster = %q, %v; want only the header", got, err)
+	}
+	if got, err := capture(t, args("--game", "1", "--by-planet-type", "--json")...); err != nil ||
+		got != "{\n  \"game_id\": 1,\n  \"by\": \"planet-type\",\n  \"groups\": []\n}\n" {
+		t.Errorf("without a cluster, --json = %q, %v; want empty groups", got, err)
+	}
+	if err := run(t.Context(), append([]string{"generate-cluster", "--game", "1"}, flags...)); err != nil {
+		t.Fatal(err)
+	}
+
+	// The seed is fixed, so the summary is too.
+	want := `TYPE       PLANETS  MIN  AVG   MAX
+rocky      360      0    12.0  23
+asteroids  105      0    0.0   0
+giant      256      0    7.6   14
+`
+	if got, err := capture(t, args("--game", "1", "--by-planet-type")...); err != nil || got != want {
+		t.Errorf("summarize-planets = %v\n%s\nwant:\n%s", err, got, want)
+	}
+
+	got, err := capture(t, args("--game", "1", "--by-planet-type", "--json")...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		GameID int64  `json:"game_id"`
+		By     string `json:"by"`
+		Groups []struct {
+			PlanetType          string  `json:"planet_type"`
+			Planets             int     `json:"planets"`
+			MinHabitability     int     `json:"min_habitability"`
+			AverageHabitability float64 `json:"average_habitability"`
+			MaxHabitability     int     `json:"max_habitability"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal([]byte(got), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.GameID != 1 || out.By != "planet-type" || len(out.Groups) != 3 {
+		t.Fatalf("--json = %s", got)
+	}
+	planets := 0
+	for i, kind := range []string{"rocky", "asteroids", "giant"} {
+		g := out.Groups[i]
+		planets += g.Planets
+		if g.PlanetType != kind || g.AverageHabitability < float64(g.MinHabitability) || g.AverageHabitability > float64(g.MaxHabitability) {
+			t.Errorf("--json group %d = %+v", i, g)
+		}
+	}
+	if planets != 721 {
+		t.Errorf("--json counts %d planets, want 721", planets)
+	}
+}
+
 func TestShowHistogram(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "game.db")
 	db, err := store.Create(t.Context(), path)

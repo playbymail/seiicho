@@ -14,6 +14,7 @@
 //	seiicho list-games [--env ENV] [--db PATH] [--json]
 //	seiicho list-seats [--env ENV] [--db PATH] --game ID [--json]
 //	seiicho show-histogram [--env ENV] [--db PATH] --game ID (--planets-per-star | --planets-per-star-system) [--json]
+//	seiicho summarize-planets [--env ENV] [--db PATH] --game ID --by-planet-type [--json]
 //	seiicho version
 //
 // --env and --db resolve as described in internal/settings. Every command
@@ -65,8 +66,16 @@
 // listed with a count of 0. A game with no cluster has no rows. It fails if
 // there is no such game.
 //
-// Commands named list print a table, and commands named show print a single
-// record. With --json, a list command prints a JSON array instead, and a show
+// summarize-planets prints a summary of a game's planets. --by-planet-type,
+// which is required, gives one row per planet type, in the order rocky,
+// asteroids, giant: the type, its number of planets, and the lowest,
+// average, and highest habitability of those planets. Types that no planet
+// has are left out, so a game with no cluster has no rows. It fails if there
+// is no such game.
+//
+// Commands named list print a table, commands named show print a single
+// record, and commands named summarize print a table of totals. With --json,
+// a list command prints a JSON array instead, and a show or summarize
 // command prints a JSON object; times are RFC 3339 in UTC. The JSON never
 // includes password hashes.
 package main
@@ -116,6 +125,7 @@ func run(ctx context.Context, args []string) error {
 			listGamesCommand(),
 			listSeatsCommand(),
 			showHistogramCommand(),
+			summarizePlanetsCommand(),
 			{
 				Name:      "version",
 				Usage:     "seiicho version",
@@ -581,6 +591,62 @@ func showHistogramCommand() *ff.Command {
 			for _, b := range bins {
 				out.Bins = append(out.Bins, binJSON{Planets: b.Planets, Count: b.Count})
 				rows = append(rows, []string{fmt.Sprint(b.Planets), fmt.Sprint(b.Count), strings.Repeat("#", b.Count)})
+			}
+			return s.print(out, rows)
+		}),
+	}
+}
+
+// planetSummaryJSON is a summary as summarize-planets prints it.
+type planetSummaryJSON struct {
+	GameID int64                   `json:"game_id"`
+	By     string                  `json:"by"`
+	Groups []planetTypeSummaryJSON `json:"groups"`
+}
+
+type planetTypeSummaryJSON struct {
+	PlanetType          string  `json:"planet_type"`
+	Planets             int     `json:"planets"`
+	MinHabitability     int     `json:"min_habitability"`
+	AverageHabitability float64 `json:"average_habitability"`
+	MaxHabitability     int     `json:"max_habitability"`
+}
+
+func summarizePlanetsCommand() *ff.Command {
+	s := newOutputSettings("summarize-planets")
+	game := s.Flags.Int64Config(ff.FlagConfig{
+		LongName: "game", Placeholder: "ID", NoDefault: true, Usage: "ID of the game (required)",
+	}, 0)
+	byType := s.Flags.BoolLong("by-planet-type", "summarize the planets of each type (required)")
+	return &ff.Command{
+		Name:      "summarize-planets",
+		Usage:     "seiicho summarize-planets [--env ENV] [--db PATH] --game ID --by-planet-type [--json]",
+		ShortHelp: "summarize a game's planets",
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			gameID := *game
+			if gameID <= 0 {
+				return errors.New("--game is required and must be a positive game ID")
+			}
+			if !*byType {
+				return errors.New("--by-planet-type is required")
+			}
+			db, err := open(ctx, s.Settings)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			summaries, err := db.PlanetsByKind(ctx, gameID)
+			if err != nil {
+				return fmt.Errorf("game %d: %w", gameID, err)
+			}
+			out := planetSummaryJSON{GameID: gameID, By: "planet-type", Groups: make([]planetTypeSummaryJSON, 0, len(summaries))}
+			rows := [][]string{{"TYPE", "PLANETS", "MIN", "AVG", "MAX"}}
+			for _, k := range summaries {
+				out.Groups = append(out.Groups, planetTypeSummaryJSON{PlanetType: k.Kind, Planets: k.Planets,
+					MinHabitability: k.MinHabitability, AverageHabitability: k.AverageHabitability, MaxHabitability: k.MaxHabitability})
+				rows = append(rows, []string{k.Kind, fmt.Sprint(k.Planets), fmt.Sprint(k.MinHabitability),
+					strconv.FormatFloat(k.AverageHabitability, 'f', 1, 64), fmt.Sprint(k.MaxHabitability)})
 			}
 			return s.print(out, rows)
 		}),

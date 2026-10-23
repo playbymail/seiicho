@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"testing"
 	"time"
@@ -218,6 +219,76 @@ func TestPlanets(t *testing.T) {
 		err := exec(t, conn, withHabitability, star, 4, "rocky", h)
 		if c := sqlite.ErrCode(err); c != sqlite.ResultConstraintCheck && c != sqlite.ResultConstraintNotNull {
 			t.Errorf("habitability %v = %v, want a constraint error", h, err)
+		}
+	}
+}
+
+func TestPlanetsByKind(t *testing.T) {
+	s, err := store.OpenPrivateMemory(t.Context(), memoryName(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Unix(1_800_000_000, 0)
+	if _, err := s.CreateAccount(t.Context(), "admin@example.com", []byte("x"), true, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PlanetsByKind(t.Context(), 1); !errors.Is(err, store.ErrGameNotFound) {
+		t.Errorf("PlanetsByKind of a missing game = %v, want ErrGameNotFound", err)
+	}
+	g, err := s.CreateGame(t.Context(), 1, 2, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.PlanetsByKind(t.Context(), g.ID); err != nil || len(got) != 0 {
+		t.Errorf("PlanetsByKind without a cluster = %v, %v; want no summaries", got, err)
+	}
+	_, planets, err := s.GenerateCluster(t.Context(), g.ID, store.ClusterOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A second game's planets must not be counted.
+	other, err := s.CreateGame(t.Context(), 3, 4, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.GenerateCluster(t.Context(), other.ID, store.ClusterOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Summarize the generated planets to compare with the stored ones.
+	var want []store.KindSummary
+	for _, kind := range []string{cluster.Rocky, cluster.Asteroids, cluster.Giant} {
+		total := 0
+		k := store.KindSummary{Kind: kind, MinHabitability: 25}
+		for _, p := range planets {
+			if p.Kind == kind {
+				k.Planets++
+				total += p.Habitability
+				k.MinHabitability = min(k.MinHabitability, p.Habitability)
+				k.MaxHabitability = max(k.MaxHabitability, p.Habitability)
+			}
+		}
+		if k.Planets > 0 {
+			k.AverageHabitability = float64(total) / float64(k.Planets)
+			want = append(want, k)
+		}
+	}
+	if len(want) != 3 {
+		t.Fatalf("the cluster has %d kinds of planet, want 3 to test with", len(want))
+	}
+	got, err := s.PlanetsByKind(t.Context(), g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("PlanetsByKind = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		w := want[i]
+		if g := got[i]; g.Kind != w.Kind || g.Planets != w.Planets || g.MinHabitability != w.MinHabitability ||
+			g.MaxHabitability != w.MaxHabitability || math.Abs(g.AverageHabitability-w.AverageHabitability) > 1e-9 {
+			t.Errorf("PlanetsByKind[%d] = %+v, want %+v", i, g, w)
 		}
 	}
 }

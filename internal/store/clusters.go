@@ -139,19 +139,8 @@ func (s *Store) planetHistogram(ctx context.Context, gameID int64, query string)
 	// Read both queries from one snapshot.
 	defer sqlitex.Save(conn)(&err)
 
-	found := false
-	err = sqlitex.Execute(conn, `SELECT 1 FROM games WHERE id = ?;`, &sqlitex.ExecOptions{
-		Args: []any{gameID},
-		ResultFunc: func(*sqlite.Stmt) error {
-			found = true
-			return nil
-		},
-	})
-	if err != nil {
+	if err := gameExists(conn, gameID); err != nil {
 		return nil, err
-	}
-	if !found {
-		return nil, ErrGameNotFound
 	}
 	var counts []int
 	err = sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
@@ -173,4 +162,66 @@ func (s *Store) planetHistogram(ctx context.Context, gameID int64, query string)
 		bins[n-lo].Count++
 	}
 	return bins, nil
+}
+
+// KindSummary summarizes a game's planets of one Kind: how many there are,
+// and the lowest, average, and highest of their habitability.
+type KindSummary struct {
+	Kind                string
+	Planets             int
+	MinHabitability     int
+	AverageHabitability float64
+	MaxHabitability     int
+}
+
+// PlanetsByKind summarizes a game's planets by kind, in the order rocky,
+// asteroids, giant. Kinds that no planet has are left out, so a game with no
+// cluster has no summaries. It returns ErrGameNotFound if there is no such
+// game.
+func (s *Store) PlanetsByKind(ctx context.Context, gameID int64) (summaries []KindSummary, err error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.pool.Put(conn)
+
+	// Read both queries from one snapshot.
+	defer sqlitex.Save(conn)(&err)
+
+	if err := gameExists(conn, gameID); err != nil {
+		return nil, err
+	}
+	err = sqlitex.Execute(conn,
+		`SELECT p.kind, count(*), min(p.habitability), avg(p.habitability), max(p.habitability)
+		 FROM planets p JOIN stars s ON s.id = p.star_id
+		 WHERE s.game_id = ?
+		 GROUP BY p.kind
+		 ORDER BY CASE p.kind WHEN 'rocky' THEN 1 WHEN 'asteroids' THEN 2 ELSE 3 END;`,
+		&sqlitex.ExecOptions{
+			Args: []any{gameID},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				summaries = append(summaries, KindSummary{
+					Kind: stmt.ColumnText(0), Planets: stmt.ColumnInt(1), MinHabitability: stmt.ColumnInt(2),
+					AverageHabitability: stmt.ColumnFloat(3), MaxHabitability: stmt.ColumnInt(4),
+				})
+				return nil
+			},
+		})
+	return summaries, err
+}
+
+// gameExists returns ErrGameNotFound if there is no game with gameID.
+func gameExists(conn *sqlite.Conn, gameID int64) error {
+	found := false
+	err := sqlitex.Execute(conn, `SELECT 1 FROM games WHERE id = ?;`, &sqlitex.ExecOptions{
+		Args: []any{gameID},
+		ResultFunc: func(*sqlite.Stmt) error {
+			found = true
+			return nil
+		},
+	})
+	if err == nil && !found {
+		err = ErrGameNotFound
+	}
+	return err
 }

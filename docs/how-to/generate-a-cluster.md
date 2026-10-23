@@ -61,6 +61,25 @@ system, all the stars at one set of coordinates. Give one of the two flags;
 add `--json` for the output described in
 [seiicho JSON output](../reference/seiicho-json.md).
 
+## Check the planet types and habitability
+
+To see how many planets of each type there are, and the lowest, average, and
+highest habitability of each type, run `summarize-planets`:
+
+```sh
+go run ./cmd/seiicho summarize-planets --env development --db tmp/seiicho.db --game 1 --by-planet-type
+```
+
+```text
+TYPE       PLANETS  MIN  AVG   MAX
+rocky      360      0    12.0  23
+asteroids  105      0    0.0   0
+giant      256      0    7.6   14
+```
+
+Add `--json` for the output described in
+[seiicho JSON output](../reference/seiicho-json.md).
+
 ## Choose the order rows are stored in
 
 By default the command stores stars sorted by their coordinates and letter,

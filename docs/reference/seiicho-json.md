@@ -1,7 +1,8 @@
 # seiicho JSON output
 
 With `--json`, the `seiicho` `list` commands print a JSON array of objects, `[]`
-when there is nothing to list, and `show` commands print a single object. The
+when there is nothing to list, and the `show` and `summarize` commands print a
+single object. The
 output is indented and ends with a newline. Times are RFC 3339 strings in UTC,
 such as `"2026-10-22T15:04:05Z"`. Password hashes are never included.
 
@@ -58,3 +59,23 @@ Each bin has these fields:
 | --- | --- | --- |
 | `planets` | number | Number of planets |
 | `count` | number | Number of stars, or star systems, with that many planets |
+
+## Planet summary
+
+Printed by `summarize-planets`.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `game_id` | number | Game ID |
+| `by` | string | How the planets are grouped: `planet-type` |
+| `groups` | array of groups | One group per planet type that has planets, in the order `rocky`, `asteroids`, `giant`; `[]` if the game has no cluster |
+
+Each group has these fields:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `planet_type` | string | `rocky`, `asteroids`, or `giant` |
+| `planets` | number | Number of planets of that type |
+| `min_habitability` | number | Lowest habitability of those planets |
+| `average_habitability` | number | Mean habitability of those planets, unrounded |
+| `max_habitability` | number | Highest habitability of those planets |
