@@ -49,17 +49,22 @@ flagged. A low `--max-neighbor-distance` rules out isolated systems. See
 A system is a **potential home system** if it has exactly one star.
 
 A star is a **potential home star** if it is the only star in a potential
-home system and has at least 5 planets.
+home system. It needs no minimum number of planets, but a star with fewer
+than 3 has no orbit 3 and so no potential home planet.
 
 A planet is a **potential home planet** if it is rocky, orbits a potential
-home star, and is in orbit 3, 4, or 5. A star with at least 5 planets always
-has those orbits, since orbits fill from 1 with no gaps.
+home star, and is in orbit 3, 4, or 5.
 
 Each potential home star has at most one candidate planet:
 
 - If it has one potential home planet, that planet is the candidate.
 - If it has more than one, the candidate is the one with the lowest
   habitability. If two of them tie, the one in the lower orbit wins.
+
+Choosing the lowest habitability is deliberate. The home world's
+habitability becomes 25 whatever it was, so raising a 0 gains the player the
+most. Raising a 22 instead would waste a planet that is already good for a
+colony.
 
 A star that is already a home star is never a candidate again. Its distance
 to its own home system is 0, which is always less than
@@ -82,12 +87,15 @@ same input however the stars were read from the database.
 The shuffle draws from a new child source:
 
 ```go
-root.Child(prng.HomeWorlds, prng.Node(n))
+root.Child(prng.HomeWorlds, prng.Node(minHome), prng.Node(maxNeighbor), prng.Node(n))
 ```
 
-where `n` is the number of home worlds already flagged in the game. Each run
-gets its own source, and running the same commands with the same parameters,
-in the same order, on the same game flags the same planets.
+where `minHome` and `maxNeighbor` are the run's parameters and `n` is the
+number of home worlds already flagged in the game, the count of planets with
+`is_homeworld = 1`. Each run gets its own source, and running the same
+commands with the same parameters, in the same order, on the same game flags
+the same planets. Step 4 draws its yield rolls from the same source, after
+the shuffle.
 
 ## Step 3: Draw
 
@@ -104,14 +112,18 @@ For the chosen planet, in one transaction:
 
 1. Set `is_homeworld` to 1.
 2. Set habitability to 25.
-3. For each of its deposits:
-   - raise the yield by 10%, rounding down, to at most 75%;
+3. For each of its deposits, in deposit-number order:
+   - raise the yield by `Roll(1, 1, 10)` percentage points, to at most 75:
+     `min(75, yield + Roll(1, 1, 10))`;
    - raise the quantity by 25%, rounding down: `quantity × 125 / 100` in
      integer arithmetic.
 
-A planet with no deposits still becomes a home world. The planet's kind,
-orbit, deposit numbers, and resources do not change. No deposits are added or
-removed.
+The generator never draws a yield above 25, so this step never reaches the
+cap of 75 on its own. The cap is there because a gamemaster may have changed
+yields by hand before the planet was flagged.
+
+The planet's kind, orbit, deposit numbers, and resources do not change. No
+deposits are added or removed.
 
 The command prints the planet it flagged and exits with status 0.
 
@@ -119,7 +131,7 @@ The command prints the planet it flagged and exits with status 0.
 
 | Node         | Value | Draws                                                   |
 | ------------ | ----: | ------------------------------------------------------- |
-| `HomeWorlds` |     8 | Step 2: one shuffle per run, from the child keyed by `n` |
+| `HomeWorlds` |     8 | Per run, from the child keyed by the parameters and `n`: Step 2's shuffle, then one roll per deposit in Step 4 |
 
 Like the other nodes, the value is permanent. Home worlds do not use any
 cluster source, so flagging them never changes the stars, planets, or
@@ -143,13 +155,24 @@ yield_pct INTEGER NOT NULL CHECK (yield_pct BETWEEN 1 AND 75),
 The `deposits` table comment says a star's deposits add up to its budget.
 That stops being true for home stars, so the comment, and
 `planetary-resources.md`, must say it applies only to stars that are not home
-stars.
+stars. The deposit reports include home worlds' raised quantities and yields.
+
+### Deposits come first
+
+Home worlds must be flagged after deposits are generated, or the raised
+quantities would be lost or the budgets would absorb them. This needs no
+separate check. `generate-cluster` stores a game's stars, planets, and
+deposits in one transaction, and refuses to run on a game that already has
+stars. So a game with stars always has its deposits, and they can never be
+generated again on top of home worlds. Requiring the game to have a cluster
+is enough.
 
 ## Command
 
 `seiicho flag-home-world --game ID --min-home-distance N --max-neighbor-distance N [--json]`
 
-- The game must exist, be active, and have a cluster.
+- The game must exist, be active, and have a cluster, which means its
+  deposits exist (see [Deposits come first](#deposits-come-first)).
 - On success it prints the planet's ID, its system's coordinates, its star's
   letter, and its orbit. `--json` prints the same as an object, documented in
   `docs/reference/seiicho-json.md`.
@@ -174,28 +197,28 @@ the update in one transaction.
 ## Expected results
 
 From the alpha game (seed `0x0123456789abcdef`): 100 systems, 55 with one
-star, 24 of those with at least 5 planets, and **21** with a rocky planet in
-orbit 3, 4, or 5. The nearest other system to those 21 stars is between 3 and
-10 away, and 3–4 away for 10 of them.
+star, and **34** of those with a rocky planet in orbit 3, 4, or 5. The
+nearest other system to those 34 stars is between 2 and 10 away; only 2 of
+them have a neighbor within 2.
 
 Home worlds flagged before a run fails, by repeated runs with the same
 parameters (simulated over 300 shuffles; a range means the shuffle matters):
 
-| Max neighbor ↓ / min home → | 3  | 4  | 6  | 8     | 10 | 12    | 16  |
-| --------------------------- | -: | -: | -: | ----: | -: | ----: | --: |
-| 2                           | 0  | 0  | 0  | 0     | 0  | 0     | 0   |
-| 3                           | 6  | 6  | 5  | 5     | 5  | 4     | 4   |
-| 4                           | 10 | 10 | 9  | 8     | 8  | 6     | 4–5 |
-| 6                           | 18 | 18 | 16 | 13–14 | 12 | 9–11  | 5–7 |
-| 16                          | 21 | 21 | 19 | 15–16 | 14 | 10–13 | 6–8 |
+| Max neighbor ↓ / min home → | 3     | 4     | 6     | 8     | 10    | 12    | 16  |
+| --------------------------- | ----: | ----: | ----: | ----: | ----: | ----: | --: |
+| 2                           | 2     | 2     | 2     | 2     | 2     | 2     | 2   |
+| 3                           | 9     | 9     | 8–9   | 8     | 8     | 7     | 5–6 |
+| 4                           | 14–15 | 14    | 13–14 | 12    | 11–12 | 8–9   | 5–7 |
+| 6                           | 25–30 | 24–29 | 21–25 | 16–19 | 13–17 | 9–14  | 6–7 |
+| 16                          | 34    | 33    | 27–28 | 18–21 | 15–19 | 9–15  | 6–8 |
 
-So `--max-neighbor-distance` below 3 is likely to fail on every game, and
-games with more than about 20 players cannot be supported at any setting.
+So `--max-neighbor-distance` below 3 leaves almost no candidates, and a game
+cannot have more than 34 home worlds at any setting.
 
 ## Tests
 
-- Systems with more than one star, stars with fewer than 5 planets, and
-  stars with no rocky planet in orbits 3–5 are never chosen.
+- Systems with more than one star, and stars with no rocky planet in orbits
+  3–5, are never chosen. A star with 3 or 4 planets can be.
 - With several candidate planets, the lowest habitability wins, then the
   lower orbit.
 - No two home systems are closer than `--min-home-distance`.
@@ -204,8 +227,11 @@ games with more than about 20 players cannot be supported at any setting.
 - A star that fails the neighbor check is skipped and the next one is tried.
 - An empty pool, or a pool where every star fails, returns an error and the
   database is unchanged.
-- The update sets habitability to 25, raises yields and quantities as
-  specified, clamps yields at 75, and leaves everything else alone.
+- The update sets habitability to 25, raises every yield by 1 to 10 points
+  and every quantity by 25%, clamps yields at 75 (tested with a yield set by
+  hand above 65), and leaves everything else alone.
+- The parameters change the shuffle: the same game and `n` with different
+  parameters draw from different sources.
 - The schema rejects habitability 25 without `is_homeworld`, and the
   reverse.
 - The same game, parameters, and run order give the same home worlds; the
@@ -217,19 +243,10 @@ games with more than about 20 players cannot be supported at any setting.
 
 ## Open questions
 
-1. **Yield increase.** "Raise by 10%, round down" reads as `yield × 110 /
-   100`. That leaves every yield from 1 to 9 unchanged, including all gold,
-   and gives at most 27, so the clamp at 75 never applies. The alternative is
-   10 percentage points (`yield + 10`, at most 35), but then there is nothing
-   to round. Which one is meant, and is 75 the right cap?
-2. **Lowest habitability.** When a star has several candidate planets, the
-   one with the *lowest* habitability becomes the home world, which leaves
-   the better planets for colonies. Is that intended?
-3. **Budgets.** Raising quantities by 25% breaks "a star's deposits add up to
-   its budget" for home stars, and the deposit reports will include the
-   raised quantities. Is that acceptable, or should the reports leave home
-   worlds out?
-4. **Recording the runs.** Home worlds depend on the operator's parameters
-   and the order of runs, not on the seed alone, so rebuilding a game from its
-   seed does not bring them back. Should the parameters of each run be
-   stored?
+1. **Recording the runs.** Keying the source by the parameters and `n` makes
+   each run reproducible, but only by someone who knows what parameters every
+   earlier run used. The database does not record them, so a game rebuilt
+   from its seed cannot get its home worlds back. Seats have the same
+   property: the database, not the seed, is their record. Should each home
+   world store the parameters it was flagged with, or is the database
+   enough?
