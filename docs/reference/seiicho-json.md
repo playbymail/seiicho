@@ -1,8 +1,8 @@
 # seiicho JSON output
 
 With `--json`, the `seiicho` `list` commands print a JSON array of objects, `[]`
-when there is nothing to list, and the `show` and `summarize` commands print a
-single object. The
+when there is nothing to list, and the `show`, `summarize`, and
+`flag-home-world` commands print a single object. The
 output is indented and ends with a newline. Times are RFC 3339 strings in UTC,
 such as `"2026-10-22T15:04:05Z"`. Password hashes are never included.
 
@@ -42,6 +42,20 @@ Printed by `list-seats`, which includes inactive seats.
 | `is_gm` | boolean | Whether it is a gamemaster seat; otherwise a player seat |
 | `is_active` | boolean | Whether the seat is active |
 | `created_at` | string | When the seat was created |
+
+## Home world
+
+Printed by `flag-home-world`.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `game_id` | number | Game ID |
+| `planet_id` | number | ID of the planet flagged as a home world |
+| `x` | number | x coordinate of the planet's star system |
+| `y` | number | y coordinate of the planet's star system |
+| `z` | number | z coordinate of the planet's star system |
+| `star` | string | Letter of the planet's star within its system, from `A` |
+| `orbit` | number | The planet's orbit, from 1 |
 
 ## Histogram
 

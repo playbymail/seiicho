@@ -2,7 +2,8 @@
 
 How the engine picks the planets that players can start on.
 
-Status: **approved, not yet implemented.**
+Status: **approved and implemented** in `homeworlds.go` (`HomeWorld` and
+`RaiseHomeDeposits`, drawn from the `prng.HomeWorlds` source).
 
 A seat can start the game only on a planet that has been flagged as a home
 world. Assigning seats to home worlds is a later, separate command. It is not

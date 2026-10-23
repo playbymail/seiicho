@@ -58,6 +58,7 @@ accounts. See [TESTING.md](TESTING.md) for the full list and the HTTP helpers.
 - [How to create a game](docs/how-to/create-a-game.md)
 - [How to deactivate or reactivate an account](docs/how-to/deactivate-an-account.md)
 - [How to find account, game, and seat IDs](docs/how-to/find-ids.md)
+- [How to flag a game's home worlds](docs/how-to/flag-home-worlds.md)
 - [How to generate a game's cluster](docs/how-to/generate-a-cluster.md)
 - [How to seat an account in a game](docs/how-to/seat-an-account.md)
 

@@ -7,6 +7,7 @@
 //
 //	seiicho create-game [--env ENV] [--db PATH] --seed SEED [--with-gamemaster ID]
 //	seiicho generate-cluster [--env ENV] [--db PATH] --game ID [--sort-stars=BOOL] [--sort-planets=BOOL]
+//	seiicho flag-home-world [--env ENV] [--db PATH] --game ID --min-home-distance N --max-neighbor-distance N [--json]
 //	seiicho add-seat [--env ENV] [--db PATH] --game ID --account ID [--gamemaster]
 //	seiicho promote-seat [--env ENV] [--db PATH] --game ID --account ID
 //	seiicho list-accounts [--env ENV] [--db PATH] [--json]
@@ -37,6 +38,18 @@
 // stores planets in allocation order. Deposits are stored grouped by planet,
 // in the planets' order. It fails if the game is missing or inactive, or
 // already has a cluster.
+//
+// flag-home-world flags one planet of a game's cluster as a home world, as
+// internal/cluster/home-worlds.md describes: a rocky planet in orbit 3, 4,
+// or 5 of the only star in its system, at least --min-home-distance (3 to
+// 16) from every home system and at most --max-neighbor-distance (1 to 16)
+// from the nearest other system that is not one. It sets the planet's
+// habitability to 25 and raises its deposits' yields and quantities. It
+// prints the planet's ID, its system's coordinates, its star's letter, and
+// its orbit. It fails, changing nothing, if the game is missing or
+// inactive, has no cluster, or has no planet that qualifies. Each run starts
+// the same random source afresh, so a failed run can be retried with looser
+// limits, and the same runs in the same order flag the same planets.
 //
 // add-seat seats an account in a game as a player, or as a gamemaster with
 // --gamemaster. It fails if the game or the account is missing or inactive,
@@ -113,7 +126,8 @@
 // Commands named list print a table, commands named show print a single
 // record, and commands named summarize print a table of totals. With --json,
 // a list command prints a JSON array instead, and a show or summarize
-// command prints a JSON object; times are RFC 3339 in UTC. The JSON never
+// command, or flag-home-world, prints a JSON object; times are RFC 3339 in
+// UTC. The JSON never
 // includes password hashes.
 package main
 
@@ -131,6 +145,7 @@ import (
 
 	"github.com/peterbourgon/ff/v4"
 	"github.com/playbymail/seiicho"
+	"github.com/playbymail/seiicho/internal/cluster"
 	"github.com/playbymail/seiicho/internal/prng"
 	"github.com/playbymail/seiicho/internal/settings"
 	"github.com/playbymail/seiicho/internal/store"
@@ -155,6 +170,7 @@ func run(ctx context.Context, args []string) error {
 		Subcommands: []*ff.Command{
 			createGameCommand(),
 			generateClusterCommand(),
+			flagHomeWorldCommand(),
 			addSeatCommand(),
 			promoteSeatCommand(),
 			listAccountsCommand(),
@@ -273,6 +289,65 @@ func generateClusterCommand() *ff.Command {
 			}
 			fmt.Printf("generated a cluster of %d stars, %d planets, and %d deposits for game %d\n", len(stars), len(planets), len(deposits), gameID)
 			return nil
+		}),
+	}
+}
+
+// homeWorldJSON is a home world as flag-home-world prints it.
+type homeWorldJSON struct {
+	GameID   int64  `json:"game_id"`
+	PlanetID int64  `json:"planet_id"`
+	X        int    `json:"x"`
+	Y        int    `json:"y"`
+	Z        int    `json:"z"`
+	Star     string `json:"star"`
+	Orbit    int    `json:"orbit"`
+}
+
+func flagHomeWorldCommand() *ff.Command {
+	s := newOutputSettings("flag-home-world")
+	game := s.Flags.Int64Config(ff.FlagConfig{
+		LongName: "game", Placeholder: "ID", NoDefault: true, Usage: "ID of the game (required)",
+	}, 0)
+	minHome := s.Flags.IntConfig(ff.FlagConfig{
+		LongName: "min-home-distance", Placeholder: "N", NoDefault: true,
+		Usage: fmt.Sprintf("least distance from every home system, %d to %d (required)", cluster.MinHomeDistanceLo, cluster.MinHomeDistanceHi),
+	}, 0)
+	maxNeighbor := s.Flags.IntConfig(ff.FlagConfig{
+		LongName: "max-neighbor-distance", Placeholder: "N", NoDefault: true,
+		Usage: fmt.Sprintf("most distance to the nearest non-home system, %d to %d (required)", cluster.MaxNeighborDistanceLo, cluster.MaxNeighborDistanceHi),
+	}, 0)
+	return &ff.Command{
+		Name:      "flag-home-world",
+		Usage:     "seiicho flag-home-world [--env ENV] [--db PATH] --game ID --min-home-distance N --max-neighbor-distance N [--json]",
+		ShortHelp: "flag a planet of a game's cluster as a home world",
+		Flags:     s.Flags,
+		Exec: settings.NoArgs(func(ctx context.Context) error {
+			gameID := *game
+			if gameID <= 0 {
+				return errors.New("--game is required and must be a positive game ID")
+			}
+			if *minHome < cluster.MinHomeDistanceLo || *minHome > cluster.MinHomeDistanceHi {
+				return fmt.Errorf("--min-home-distance is required and must be from %d to %d", cluster.MinHomeDistanceLo, cluster.MinHomeDistanceHi)
+			}
+			if *maxNeighbor < cluster.MaxNeighborDistanceLo || *maxNeighbor > cluster.MaxNeighborDistanceHi {
+				return fmt.Errorf("--max-neighbor-distance is required and must be from %d to %d", cluster.MaxNeighborDistanceLo, cluster.MaxNeighborDistanceHi)
+			}
+			db, err := open(ctx, s.Settings)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			h, err := db.FlagHomeWorld(ctx, gameID, *minHome, *maxNeighbor)
+			if err != nil {
+				return fmt.Errorf("game %d: %w", gameID, err)
+			}
+			if s.json {
+				return s.print(homeWorldJSON{GameID: gameID, PlanetID: h.PlanetID, X: h.X, Y: h.Y, Z: h.Z, Star: h.Seq, Orbit: h.Orbit}, nil)
+			}
+			_, err = fmt.Fprintf(stdout, "flagged planet %d as a home world in game %d: system %d %d %d, star %s, orbit %d\n",
+				h.PlanetID, gameID, h.X, h.Y, h.Z, h.Seq, h.Orbit)
+			return err
 		}),
 	}
 }

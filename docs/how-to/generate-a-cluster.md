@@ -121,6 +121,9 @@ these histograms are scaled so that the longest has 50 `#`s.
 Add `--json` to either command for the output described in
 [seiicho JSON output](../reference/seiicho-json.md).
 
+Players start on home worlds, which the cluster does not have yet. To flag
+them, see [How to flag a game's home worlds](flag-home-worlds.md).
+
 ## Choose the order rows are stored in
 
 By default the command stores stars sorted by their coordinates and letter,

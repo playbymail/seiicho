@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/playbymail/seiicho/internal/cluster"
 	"github.com/playbymail/seiicho/internal/settings"
 	"github.com/playbymail/seiicho/internal/store"
 	"zombiezen.com/go/sqlite"
@@ -227,6 +229,73 @@ func TestGenerateCluster(t *testing.T) {
 				t.Errorf("game %d has %d %s out of sorted order, want sorted %v", game.id, n, tc.table, game.sorted)
 			}
 		}
+	}
+}
+
+func TestFlagHomeWorld(t *testing.T) {
+	flags := depositsDB(t)
+	args := func(extra ...string) []string {
+		return append(append([]string{"flag-home-world"}, flags...), extra...)
+	}
+	limits := []string{"--min-home-distance", "6", "--max-neighbor-distance", "6"}
+
+	// The flags are checked before the database is opened.
+	bad := []string{"--env", "test", "--db", filepath.Join(t.TempDir(), "missing.db")}
+	for _, tc := range []struct {
+		extra []string
+		want  string
+	}{
+		{limits, "--game is required"},
+		{[]string{"--game", "1", "--max-neighbor-distance", "6"}, "--min-home-distance is required and must be from 3 to 16"},
+		{[]string{"--game", "1", "--min-home-distance", "2", "--max-neighbor-distance", "6"}, "--min-home-distance is required and must be from 3 to 16"},
+		{[]string{"--game", "1", "--min-home-distance", "17", "--max-neighbor-distance", "6"}, "--min-home-distance is required and must be from 3 to 16"},
+		{[]string{"--game", "1", "--min-home-distance", "6"}, "--max-neighbor-distance is required and must be from 1 to 16"},
+		{[]string{"--game", "1", "--min-home-distance", "6", "--max-neighbor-distance", "0"}, "--max-neighbor-distance is required and must be from 1 to 16"},
+		{[]string{"--game", "1", "--min-home-distance", "16", "--max-neighbor-distance", "17"}, "--max-neighbor-distance is required and must be from 1 to 16"},
+	} {
+		a := append(append([]string{"flag-home-world"}, bad...), tc.extra...)
+		if _, err := capture(t, a...); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%v = %v, want %q", tc.extra, err, tc.want)
+		}
+	}
+	if _, err := capture(t, args(append([]string{"--game", "2"}, limits...)...)...); !errors.Is(err, store.ErrGameNotFound) {
+		t.Errorf("missing game = %v, want ErrGameNotFound", err)
+	}
+	if _, err := capture(t, args(append([]string{"--game", "1"}, limits...)...)...); !errors.Is(err, store.ErrNoCluster) {
+		t.Errorf("game without a cluster = %v, want ErrNoCluster", err)
+	}
+	if err := run(t.Context(), append([]string{"generate-cluster", "--game", "1"}, flags...)); err != nil {
+		t.Fatal(err)
+	}
+
+	// The first home worlds of the seed, as cluster's TestHomeWorldPins
+	// pins them.
+	got, err := capture(t, args(append([]string{"--game", "1"}, limits...)...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := regexp.MustCompile(`^flagged planet \d+ as a home world in game 1: system 5 3 14, star A, orbit 4\n$`); !want.MatchString(got) {
+		t.Errorf("flag-home-world = %q, want a match for %s", got, want)
+	}
+	got, err = capture(t, args(append([]string{"--game", "1", "--json"}, limits...)...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var h homeWorldJSON
+	if err := json.Unmarshal([]byte(got), &h); err != nil {
+		t.Fatalf("flag-home-world --json = %q: %v", got, err)
+	}
+	if h.PlanetID <= 0 || h != (homeWorldJSON{GameID: 1, PlanetID: h.PlanetID, X: 26, Y: 18, Z: 17, Star: "A", Orbit: 3}) {
+		t.Errorf("flag-home-world --json = %+v, want the planet in orbit 3 of 26 18 17 A", h)
+	}
+	if !strings.Contains(got, `"star": "A"`) {
+		t.Errorf("flag-home-world --json = %s, want a star field", got)
+	}
+
+	// No system has a neighbor within 1.
+	got, err = capture(t, args("--game", "1", "--min-home-distance", "3", "--max-neighbor-distance", "1")...)
+	if !errors.Is(err, cluster.ErrNoHomeWorld) || got != "" {
+		t.Errorf("flag-home-world with no planet qualifying = %q, %v; want ErrNoHomeWorld", got, err)
 	}
 }
 
