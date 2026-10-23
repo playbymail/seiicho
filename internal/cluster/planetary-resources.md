@@ -148,7 +148,7 @@ The `planets` table stores habitability as
 
 The check allows 25, but the generator never draws it: rocky planets top out
 at 24. Habitability 25 is reserved for players' home worlds, which a later,
-separate process will assign. That process is not designed yet.
+separate process assigns. See `home-worlds.md`.
 
 ## Step 3: Assign deposits
 

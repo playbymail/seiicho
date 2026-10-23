@@ -2,7 +2,7 @@
 
 How the engine picks the planets that players can start on.
 
-Status: **draft, not approved.**
+Status: **approved, not yet implemented.**
 
 A seat can start the game only on a planet that has been flagged as a home
 world. Assigning seats to home worlds is a later, separate command. It is not
